@@ -15,9 +15,9 @@ export class SecretStoreError extends Error {
 export class SecretStore {
   constructor(private readonly settings: SettingsRepository, private readonly safeStorage: SafeStorageLike) {}
 
-  set(value: string, existingKey?: string): string {
+  set(value: string): string {
     if (!this.safeStorage.isEncryptionAvailable()) throw new SecretStoreError('SECRET_UNAVAILABLE', 'Secure secret storage is unavailable on this device.');
-    const key = existingKey ?? `proxy-password:${randomUUID()}`;
+    const key = `proxy-password:${randomUUID()}`;
     const encrypted = this.safeStorage.encryptString(value).toString('base64');
     this.settings.set(key, encrypted);
     return key;

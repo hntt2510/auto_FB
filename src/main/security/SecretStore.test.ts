@@ -11,7 +11,8 @@ describe('SecretStore', () => {
   it('encrypts, reads, replaces, and deletes secrets through the settings abstraction', () => {
     const { store, values } = setup(); const key = store.set('proxy-password');
     expect(values.get(key)).toBe(Buffer.from('enc:proxy-password').toString('base64')); expect(store.get(key)).toBe('proxy-password');
-    store.set('replacement', key); expect(store.get(key)).toBe('replacement'); store.delete(key); expect(values.has(key)).toBe(false);
+    const replacementKey = store.set('replacement'); expect(replacementKey).not.toBe(key); expect(store.get(key)).toBe('proxy-password'); expect(store.get(replacementKey)).toBe('replacement');
+    store.delete(key); store.delete(replacementKey); expect(values.has(key)).toBe(false); expect(values.has(replacementKey)).toBe(false);
   });
 
   it('rejects encryption when safe storage is unavailable', () => {

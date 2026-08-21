@@ -62,6 +62,7 @@ export type ApiErrorCode =
   | 'DATABASE_ERROR'
   | 'INVALID_REQUEST'
   | 'PROFILE_DELETE_FAILED'
+  | 'UNAUTHORIZED_IPC'
   | 'UNKNOWN_ERROR';
 
 export type ApiError = { code: ApiErrorCode; message: string };

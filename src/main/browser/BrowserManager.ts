@@ -11,36 +11,52 @@ import type { AccountStatus, FacebookAccount, HealthCheckResult } from '@shared/
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= '0';
 
 type RuntimeEntry = { context: BrowserContext; temporary: boolean; closing: boolean; finalized: boolean; startupFailure: boolean };
+type LaunchOptions = Parameters<typeof import('playwright').chromium.launchPersistentContext>[1];
+export type PersistentContextLauncher = (profileDirectory: string, options: LaunchOptions) => Promise<BrowserContext>;
 
 export class BrowserManager {
   private readonly contexts = new Map<string, RuntimeEntry>();
   private readonly locks = new AccountLockManager();
   private readonly health = new SessionHealthService();
+  private readonly operations = new Map<string, Promise<void>>();
+  private readonly launchPersistentContext: PersistentContextLauncher;
+  private shuttingDown = false;
 
   constructor(
     private readonly accounts: AccountRepository,
     private readonly profiles: ProfileManager,
     private readonly secrets: SecretStore,
     private readonly audit: AuditLogRepository,
-    private readonly notify: () => void
-  ) {}
+    private readonly notify: () => void,
+    launcher?: PersistentContextLauncher
+  ) {
+    this.launchPersistentContext = launcher ?? ((profileDirectory, options) => this.launchWithPlaywright(profileDirectory, options));
+  }
 
-  isRunning(accountId: string): boolean { return this.contexts.has(accountId); }
+  isRunning(accountId: string): boolean { return this.contexts.has(accountId) || this.locks.isLocked(accountId); }
   getRuntimeState(accountId: string): AccountStatus { return this.contexts.get(accountId) ? 'RUNNING' : (this.accounts.get(accountId)?.status ?? 'STOPPED'); }
 
   async openAccount(accountId: string): Promise<FacebookAccount> {
+    return this.enqueue(accountId, () => this.openAccountInternal(accountId));
+  }
+
+  async closeAccount(accountId: string): Promise<FacebookAccount> {
+    return this.enqueue(accountId, () => this.closeAccountInternal(accountId));
+  }
+
+  private async openAccountInternal(accountId: string): Promise<FacebookAccount> {
+    if (this.shuttingDown) throw new AppError('BROWSER_LAUNCH_FAILED', 'Browser manager is shutting down.');
     const account = this.requireAccount(accountId);
     if (this.contexts.has(accountId) || this.locks.isLocked(accountId)) throw new AppError('ACCOUNT_ALREADY_RUNNING', 'Account already running.');
     return this.launch(account, false);
   }
 
-  async closeAccount(accountId: string): Promise<FacebookAccount> {
+  private async closeAccountInternal(accountId: string): Promise<FacebookAccount> {
     const entry = this.contexts.get(accountId);
     if (!entry) {
-      this.locks.release(accountId);
       const account = this.requireAccount(accountId);
       if (account.status === 'STARTING' || account.status === 'RUNNING') this.accounts.setStatus(accountId, 'STOPPED');
-      this.notify();
+      this.notifySafely();
       return this.requireAccount(accountId);
     }
     entry.closing = true;
@@ -50,6 +66,12 @@ export class BrowserManager {
   }
 
   async healthCheck(accountId: string): Promise<HealthCheckResult> {
+    if (this.shuttingDown) throw new AppError('BROWSER_LAUNCH_FAILED', 'Browser manager is shutting down.');
+    return this.enqueue(accountId, () => this.healthCheckInternal(accountId));
+  }
+
+  private async healthCheckInternal(accountId: string): Promise<HealthCheckResult> {
+    if (this.shuttingDown) throw new AppError('BROWSER_LAUNCH_FAILED', 'Browser manager is shutting down.');
     const account = this.requireAccount(accountId);
     let entry = this.contexts.get(accountId);
     let temporary = false;
@@ -68,7 +90,7 @@ export class BrowserManager {
         const reason = sanitizeMessage(error instanceof Error ? error.message : 'Facebook could not be reached.');
         result = { accountId, status: 'ERROR', checkedAt: new Date().toISOString(), reason: `Facebook could not be reached: ${reason}` };
         this.accounts.setHealth(accountId, result.status, result.checkedAt, result.reason);
-        this.audit.add({ accountId, eventType: 'SESSION_HEALTH', message: `${result.status}: ${result.reason}` });
+        this.auditSafely({ accountId, eventType: 'SESSION_HEALTH', message: `${result.status}: ${result.reason}` });
         return result;
       }
       let classification;
@@ -78,34 +100,36 @@ export class BrowserManager {
         const reason = sanitizeMessage(error instanceof Error ? error.message : 'Facebook page inspection failed.');
         result = { accountId, status: 'ERROR', checkedAt: new Date().toISOString(), reason: `Facebook page inspection failed: ${reason}` };
         this.accounts.setHealth(accountId, result.status, result.checkedAt, result.reason);
-        this.audit.add({ accountId, eventType: 'SESSION_HEALTH', message: `${result.status}: ${result.reason}` });
+        this.auditSafely({ accountId, eventType: 'SESSION_HEALTH', message: `${result.status}: ${result.reason}` });
         return result;
       }
       result = { accountId, status: classification.status, checkedAt: new Date().toISOString(), reason: classification.reason };
       this.accounts.setHealth(accountId, result.status, result.checkedAt, result.reason);
-      this.audit.add({ accountId, eventType: 'SESSION_HEALTH', message: result.reason ? `${result.status}: ${result.reason}` : result.status });
+      this.auditSafely({ accountId, eventType: 'SESSION_HEALTH', message: result.reason ? `${result.status}: ${result.reason}` : result.status });
       return result;
     } finally {
-      this.notify();
-      if (temporary && this.contexts.has(accountId)) await this.closeAccount(accountId);
+      this.notifySafely();
+      if (temporary && this.contexts.has(accountId)) await this.closeAccountInternal(accountId);
     }
   }
 
   async closeAll(): Promise<void> {
-    const ids = [...this.contexts.keys()];
-    await Promise.allSettled(ids.map((id) => this.closeAccount(id)));
+    this.shuttingDown = true;
+    const ids = new Set([...this.operations.keys(), ...this.contexts.keys()]);
+    await Promise.allSettled([...ids].map((id) => this.enqueue(id, () => this.closeAccountInternal(id))));
+    // Any lock left here is an invariant violation, but clearing it is safe
+    // only after every queued lifecycle operation has settled.
     this.locks.clear();
   }
 
   private async launch(account: FacebookAccount, temporary: boolean): Promise<FacebookAccount> {
     if (!this.locks.acquire(account.id)) throw new AppError('ACCOUNT_ALREADY_RUNNING', 'Account already running.');
     this.accounts.setStatus(account.id, 'STARTING');
-    this.notify();
+    this.notifySafely();
     let entry: RuntimeEntry | undefined;
     try {
       this.profiles.assertControlledDirectory(account.profileDirectory);
-      const chromium = await this.getChromium();
-      const options: Parameters<typeof import('playwright').chromium.launchPersistentContext>[1] = { headless: false, viewport: null };
+      const options: LaunchOptions = { headless: false, viewport: null };
       if (account.proxyEnabled) {
         if (!account.proxyHost || !account.proxyPort) throw new AppError('INVALID_REQUEST', 'Proxy host and port are required.');
         options.proxy = { server: `http://${account.proxyHost}:${account.proxyPort}` };
@@ -119,15 +143,15 @@ export class BrowserManager {
           }
         }
       }
-      const context = await chromium.launchPersistentContext(account.profileDirectory, options);
+      const context = await this.launchPersistentContext(account.profileDirectory, options);
       entry = { context, temporary, closing: false, finalized: false, startupFailure: false };
       this.contexts.set(account.id, entry);
       context.on('close', () => { void this.finalizeClose(account.id, entry!, !entry!.startupFailure); });
       const page = await this.getPage(context);
       await page.goto('https://www.facebook.com/', { waitUntil: 'domcontentloaded', timeout: 45000 });
       this.accounts.setOpened(account.id, new Date().toISOString());
-      this.audit.add({ accountId: account.id, eventType: 'BROWSER_STARTED', message: temporary ? 'Persistent browser started for health check.' : 'Persistent browser started.' });
-      this.notify();
+      this.auditSafely({ accountId: account.id, eventType: 'BROWSER_STARTED', message: temporary ? 'Persistent browser started for health check.' : 'Persistent browser started.' });
+      this.notifySafely();
       return this.requireAccount(account.id);
     } catch (error) {
       if (entry) {
@@ -139,9 +163,9 @@ export class BrowserManager {
         this.locks.release(account.id);
       }
       const appError = error instanceof AppError ? error : new AppError(this.isProxyError(error) ? 'PROXY_AUTH_FAILED' : 'BROWSER_LAUNCH_FAILED', this.isProxyError(error) ? 'Proxy connection or authentication failed.' : `Unable to launch ${account.name}.`);
-      this.accounts.setStatus(account.id, 'ERROR', appError.message);
-      this.audit.add({ accountId: account.id, eventType: 'BROWSER_ERROR', message: appError.message });
-      this.notify();
+      try { this.accounts.setStatus(account.id, 'ERROR', appError.message); } catch { /* preserve process if persistence is unavailable */ }
+      this.auditSafely({ accountId: account.id, eventType: 'BROWSER_ERROR', message: appError.message });
+      this.notifySafely();
       throw appError;
     }
   }
@@ -151,12 +175,16 @@ export class BrowserManager {
     entry.finalized = true;
     if (this.contexts.get(accountId) === entry) this.contexts.delete(accountId);
     this.locks.release(accountId);
-    const account = this.accounts.get(accountId);
-    if (account && !entry.startupFailure) {
-      this.accounts.setStatus(accountId, 'STOPPED');
-      if (writeAudit) this.audit.add({ accountId, eventType: 'BROWSER_CLOSED', message: 'Persistent browser closed.' });
+    try {
+      let account: FacebookAccount | undefined;
+      try { account = this.accounts.get(accountId); } catch { account = undefined; }
+      if (account && !entry.startupFailure) {
+        try { this.accounts.setStatus(accountId, 'STOPPED'); } catch { /* best-effort status persistence during shutdown */ }
+        if (writeAudit) this.auditSafely({ accountId, eventType: 'BROWSER_CLOSED', message: 'Persistent browser closed.' });
+      }
+    } finally {
+      this.notifySafely();
     }
-    this.notify();
   }
 
   private async getPage(context: BrowserContext): Promise<Page> {
@@ -164,9 +192,26 @@ export class BrowserManager {
     return pages[0] ?? context.newPage();
   }
 
-  private async getChromium(): Promise<typeof import('playwright').chromium> {
+  private async launchWithPlaywright(profileDirectory: string, options: LaunchOptions): Promise<BrowserContext> {
     process.env.PLAYWRIGHT_BROWSERS_PATH ??= '0';
-    return (await import('playwright')).chromium;
+    return (await import('playwright')).chromium.launchPersistentContext(profileDirectory, options);
+  }
+
+  private enqueue<T>(accountId: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.operations.get(accountId) ?? Promise.resolve();
+    const current = previous.catch(() => undefined).then(operation);
+    const tail = current.then(() => undefined, () => undefined);
+    this.operations.set(accountId, tail);
+    tail.then(() => { if (this.operations.get(accountId) === tail) this.operations.delete(accountId); });
+    return current;
+  }
+
+  private auditSafely(entry: { accountId?: string; eventType: string; message: string }): void {
+    try { this.audit.add(entry); } catch { /* audit failure must not break browser lifecycle */ }
+  }
+
+  private notifySafely(): void {
+    try { this.notify(); } catch { /* renderer shutdown must not reject lifecycle promises */ }
   }
 
   private requireAccount(accountId: string): FacebookAccount {

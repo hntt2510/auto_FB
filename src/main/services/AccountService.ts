@@ -34,21 +34,24 @@ export class AccountService {
     try { profileDirectory = this.profiles.createProfile(data.profileName); }
     catch (error) { throw new AppError('DUPLICATE_PROFILE', error instanceof ProfilePathError ? error.message : 'Unable to create profile directory.'); }
     let passwordKey: string | undefined;
+    let account: FacebookAccount;
     try {
       if (data.proxyEnabled && data.proxyPassword) passwordKey = this.secrets.set(data.proxyPassword);
       const timestamp = new Date().toISOString();
-      const account = this.accounts.insert({ id: randomUUID(), name: data.name, profileName: data.profileName, profileDirectory,
+      account = this.accounts.insert({ id: randomUUID(), name: data.name, profileName: data.profileName, profileDirectory,
         proxyEnabled: data.proxyEnabled, proxyHost: data.proxyEnabled ? data.proxyHost : undefined, proxyPort: data.proxyEnabled ? data.proxyPort : undefined,
         proxyUsername: data.proxyEnabled ? data.proxyUsername : undefined, proxyPasswordKey: passwordKey, createdAt: timestamp, updatedAt: timestamp });
-      this.audit.add({ accountId: account.id, eventType: 'ACCOUNT_CREATED', message: `Account ${account.name} created.` });
-      this.onChanged();
-      return publicAccount(account);
     } catch (error) {
       this.secrets.delete(passwordKey);
       this.profiles.deleteProfile(profileDirectory);
       if (error instanceof AppError) throw error;
       throw new AppError('DATABASE_ERROR', 'Unable to save the account.');
     }
+    // Audit and renderer notification must never roll back a committed account
+    // or delete its profile/secret after the database row exists.
+    try { this.audit.add({ accountId: account.id, eventType: 'ACCOUNT_CREATED', message: `Account ${account.name} created.` }); } catch { /* best-effort audit */ }
+    this.notifyChanged();
+    return publicAccount(account);
   }
 
   update(input: UpdateAccountInput): FacebookAccount {
@@ -57,24 +60,42 @@ export class AccountService {
     const data = parsed.data;
     const current = this.require(data.accountId);
     if (this.browser.isRunning(data.accountId)) throw new AppError('ACCOUNT_RUNNING', 'Close the account before editing it.');
-    let key = current.proxyPasswordKey;
+    const oldKey = current.proxyPasswordKey;
+    let key = oldKey;
+    let newKey: string | undefined;
+    let oldKeyToDelete: string | undefined;
+    let dbUpdated = false;
     try {
       if (!data.proxyEnabled) {
-        this.secrets.delete(key); key = undefined;
+        key = undefined;
+        oldKeyToDelete = oldKey;
       } else {
         if (!data.proxyHost || !data.proxyPort) throw new AppError('INVALID_REQUEST', 'Proxy host and port are required.');
-        if (data.clearProxyPassword) { this.secrets.delete(key); key = undefined; }
-        if (data.proxyPassword) key = this.secrets.set(data.proxyPassword, key);
-        if (!data.proxyUsername && key) { this.secrets.delete(key); key = undefined; }
+        if (data.clearProxyPassword) { key = undefined; oldKeyToDelete = oldKey; }
+        if (data.proxyPassword) {
+          // Always stage a new key. The old secret remains usable until the
+          // account row has successfully switched to the new key.
+          newKey = this.secrets.set(data.proxyPassword);
+          key = newKey;
+          oldKeyToDelete = oldKey;
+        }
+        if (!data.proxyUsername && key) { key = undefined; oldKeyToDelete = oldKey; }
         if (data.proxyUsername && !key) throw new AppError('INVALID_REQUEST', 'Proxy password is required for an authenticated proxy.');
       }
       const account = this.accounts.updateProxyAndName(data.accountId, { name: data.name, proxyEnabled: data.proxyEnabled,
         proxyHost: data.proxyEnabled ? data.proxyHost : undefined, proxyPort: data.proxyEnabled ? data.proxyPort : undefined,
         proxyUsername: data.proxyEnabled ? data.proxyUsername : undefined, proxyPasswordKey: key });
-      this.audit.add({ accountId: account.id, eventType: 'ACCOUNT_UPDATED', message: `Account ${account.name} updated.` });
-      this.onChanged();
+      dbUpdated = true;
+      if (oldKeyToDelete && oldKeyToDelete !== key) {
+        try { this.secrets.delete(oldKeyToDelete); } catch { /* orphaned ciphertext is safer than a stale DB reference */ }
+      }
+      try { this.audit.add({ accountId: account.id, eventType: 'ACCOUNT_UPDATED', message: `Account ${account.name} updated.` }); } catch { /* best-effort audit */ }
+      this.notifyChanged();
       return publicAccount(account);
     } catch (error) {
+      if (newKey && !dbUpdated) {
+        try { this.secrets.delete(newKey); } catch { /* cleanup failure leaves an unreferenced secret */ }
+      }
       if (error instanceof SecretStoreError) throw new AppError(error.code, error.message);
       if (error instanceof AppError) throw error;
       throw new AppError('DATABASE_ERROR', 'Unable to update the account.');
@@ -86,14 +107,21 @@ export class AccountService {
     if (!parsed.success) throw new AppError('INVALID_REQUEST', 'Invalid delete request.');
     const account = this.require(parsed.data.accountId);
     if (this.browser.isRunning(account.id)) throw new AppError('ACCOUNT_RUNNING', 'Close the account before deleting it.');
+    // Remove the DB row first. If that fails, the account, profile, and secret
+    // remain fully recoverable. Cleanup after commit is deliberately best effort.
+    try { this.accounts.delete(account.id); }
+    catch { throw new AppError('DATABASE_ERROR', 'Unable to delete the account record.'); }
+    let cleanupWarning = false;
+    try { this.secrets.delete(account.proxyPasswordKey); } catch { cleanupWarning = true; }
     if (parsed.data.deleteProfile) {
       try { this.profiles.deleteProfile(account.profileDirectory); }
-      catch (error) { throw new AppError('PROFILE_DELETE_FAILED', error instanceof Error ? error.message : 'Unable to delete the profile directory.'); }
+      catch { cleanupWarning = true; }
     }
-    this.secrets.delete(account.proxyPasswordKey);
-    this.accounts.delete(account.id);
-    this.audit.add({ accountId: account.id, eventType: 'ACCOUNT_DELETED', message: parsed.data.deleteProfile ? 'Account and profile deleted.' : 'Account record deleted; profile preserved.' });
-    this.onChanged();
+    const message = parsed.data.deleteProfile
+      ? cleanupWarning ? 'Account record deleted; profile or secret cleanup requires manual review.' : 'Account and profile deleted.'
+      : cleanupWarning ? 'Account record deleted; secret cleanup requires manual review.' : 'Account record deleted; profile preserved.';
+    try { this.audit.add({ accountId: account.id, eventType: 'ACCOUNT_DELETED', message }); } catch { /* best-effort audit */ }
+    this.notifyChanged();
   }
 
   async open(accountId: string): Promise<FacebookAccount> { const id = this.validId(accountId); return publicAccount(await this.browser.openAccount(id)); }
@@ -117,6 +145,10 @@ export class AccountService {
     const parsed = accountIdSchema.safeParse(id);
     if (!parsed.success) throw new AppError('INVALID_REQUEST', 'Invalid account id.');
     return parsed.data;
+  }
+
+  private notifyChanged(): void {
+    try { this.onChanged(); } catch { /* renderer shutdown must not undo committed state */ }
   }
 }
 

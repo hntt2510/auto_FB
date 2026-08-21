@@ -81,5 +81,10 @@ export class AccountRepository {
     this.db.prepare("UPDATE accounts SET status = 'STOPPED', updated_at = ? WHERE status IN ('STARTING', 'RUNNING')").run(new Date().toISOString());
   }
 
+  hasActiveQueueItems(id: string): boolean {
+    const row = this.db.prepare("SELECT 1 AS present FROM queue_items WHERE account_id = ? AND status IN ('PENDING', 'PAUSED') LIMIT 1").get(id) as { present: number } | undefined;
+    return Boolean(row);
+  }
+
   delete(id: string): void { this.db.prepare('DELETE FROM accounts WHERE id = ?').run(id); }
 }

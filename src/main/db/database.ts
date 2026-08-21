@@ -3,13 +3,14 @@ import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { runMigrations } from './migrations';
 
-export type AppPaths = { dataRoot: string; database: string; profiles: string; logs: string };
+export type AppPaths = { dataRoot: string; database: string; profiles: string; logs: string; media: string };
 
 export function createAppPaths(userData: string): AppPaths {
   const dataRoot = join(userData, 'fb-account-manager');
-  const paths = { dataRoot, database: join(dataRoot, 'app.db'), profiles: join(dataRoot, 'profiles'), logs: join(dataRoot, 'logs') };
+  const paths = { dataRoot, database: join(dataRoot, 'app.db'), profiles: join(dataRoot, 'profiles'), logs: join(dataRoot, 'logs'), media: join(dataRoot, 'media') };
   mkdirSync(paths.profiles, { recursive: true });
   mkdirSync(paths.logs, { recursive: true });
+  mkdirSync(paths.media, { recursive: true });
   return paths;
 }
 

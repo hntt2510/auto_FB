@@ -30,7 +30,8 @@ function setup(updateResult?: (fields: Record<string, unknown>) => FacebookAccou
       current = next;
       return next;
     }),
-    delete: vi.fn()
+    delete: vi.fn(),
+    hasActiveQueueItems: vi.fn(() => false)
   };
   const secrets = {
     set: vi.fn((value: string) => { const key = `new-key-${++sequence}`; storedSecrets.set(key, value); return key; }),

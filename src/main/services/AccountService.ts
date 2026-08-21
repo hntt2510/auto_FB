@@ -107,6 +107,7 @@ export class AccountService {
     if (!parsed.success) throw new AppError('INVALID_REQUEST', 'Invalid delete request.');
     const account = this.require(parsed.data.accountId);
     if (this.browser.isRunning(account.id)) throw new AppError('ACCOUNT_RUNNING', 'Close the account before deleting it.');
+    if (this.accounts.hasActiveQueueItems(account.id)) throw new AppError('ENTITY_IN_USE', 'Cancel or remove active queue items before deleting this account.');
     // Remove the DB row first. If that fails, the account, profile, and secret
     // remain fully recoverable. Cleanup after commit is deliberately best effort.
     try { this.accounts.delete(account.id); }

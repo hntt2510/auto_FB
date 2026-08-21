@@ -5,13 +5,24 @@ release/
 
 data/
 profiles/
+media/
+runtime/
+fb-account-manager/
+**/profiles/
+**/media/
 
 *.db
 *.db-shm
 *.db-wal
+*.sqlite
+*.sqlite3
+*.sqlite-shm
+*.sqlite-wal
 
 .env
 .env.*
 
 playwright-report/
 test-results/
+playwright/.cache/
+.playwright/

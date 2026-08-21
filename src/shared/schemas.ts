@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { normalizeTags } from './groupUrl';
 
 const WINDOWS_RESERVED_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
 
@@ -62,6 +63,28 @@ export const updateAccountSchema = z.object({
 
 export const deleteAccountSchema = z.object({ accountId: accountIdSchema, deleteProfile: z.boolean() });
 export const logFilterSchema = z.object({ accountId: accountIdSchema.optional(), eventType: z.string().trim().max(100).optional(), from: z.string().datetime().optional(), to: z.string().datetime().optional() });
+
+export const groupIdSchema = accountIdSchema;
+export const groupInputSchema = z.object({ name: z.string().trim().min(1).max(160), url: z.string().trim().min(1).max(2048), notes: z.string().max(4000).optional(), tags: z.array(z.string().max(40)).max(30).transform(normalizeTags), active: z.boolean().optional() });
+export const groupFilterSchema = z.object({ search: z.string().trim().max(200).optional(), tag: z.string().trim().max(40).optional(), active: z.boolean().optional() });
+export const groupImportSchema = z.object({ text: z.string().max(256_000) });
+export const assignmentSchema = z.object({ groupId: groupIdSchema, accountIds: z.array(accountIdSchema).max(100) });
+export const accountAssignmentSchema = z.object({ accountId: accountIdSchema, groupIds: z.array(groupIdSchema).max(500) });
+export const groupOpenSchema = z.object({ groupId: groupIdSchema, accountId: accountIdSchema });
+
+export const draftIdSchema = accountIdSchema;
+export const draftInputSchema = z.object({ title: z.string().trim().min(1).max(160), body: z.string().max(63_000), linkUrl: z.string().url().max(2048).optional() });
+export const draftFilterSchema = z.object({ search: z.string().trim().max(200).optional(), status: z.enum(['DRAFT', 'READY', 'ARCHIVED']).optional() });
+export const draftStatusSchema = z.object({ draftId: draftIdSchema, status: z.enum(['DRAFT', 'READY', 'ARCHIVED']) });
+export const mediaIdSchema = accountIdSchema;
+export const mediaRemoveSchema = z.object({ draftId: draftIdSchema, mediaId: mediaIdSchema });
+export const mediaReorderSchema = z.object({ draftId: draftIdSchema, mediaIds: z.array(mediaIdSchema).max(100) });
+
+export const queueIdSchema = accountIdSchema;
+export const queueTargetSchema = z.object({ accountId: accountIdSchema, groupId: groupIdSchema });
+export const queueBatchSchema = z.object({ draftId: draftIdSchema, targets: z.array(queueTargetSchema).min(1).max(500), scheduledAt: z.string().datetime().refine((value) => value.endsWith('Z'), 'Schedule must be a UTC ISO timestamp.').optional() });
+export const queueFilterSchema = z.object({ search: z.string().trim().max(200).optional(), status: z.enum(['PENDING', 'PAUSED', 'CANCELLED']).optional(), accountId: accountIdSchema.optional(), groupId: groupIdSchema.optional(), from: z.string().datetime().optional(), to: z.string().datetime().optional() });
+export const queueStateSchema = z.object({ queueId: queueIdSchema });
 
 export type CreateAccountData = z.infer<typeof createAccountSchema>;
 export type UpdateAccountData = z.infer<typeof updateAccountSchema>;

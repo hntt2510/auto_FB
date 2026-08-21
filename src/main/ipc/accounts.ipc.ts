@@ -1,43 +1,22 @@
-import { BrowserWindow, ipcMain } from 'electron';
-import type { IpcMainInvokeEvent } from 'electron';
-import { AppError, toApiError } from '@main/errors';
+import { BrowserWindow } from 'electron';
 import type { AccountService } from '@main/services/AccountService';
-import { logFilterSchema } from '@shared/schemas';
-import type { CreateAccountInput, DeleteAccountInput, UpdateAccountInput } from '@shared/types';
-import { isAuthorizedIpcSender } from './senderPolicy';
-
-type Response<T> = { ok: true; data: T } | { ok: false; error: ReturnType<typeof toApiError> };
-const success = <T>(data: T): Response<T> => ({ ok: true, data });
-const failure = <T>(error: unknown): Response<T> => ({ ok: false, error: toApiError(error) });
-
-async function safely<T>(fn: () => T | Promise<T>): Promise<Response<T>> {
-  try { return success(await fn()); } catch (error) { return failure<T>(error); }
-}
-
-async function safelyFrom<T>(event: IpcMainInvokeEvent, allowedSenderIds: () => ReadonlySet<number>, fn: () => T | Promise<T>): Promise<Response<T>> {
-  return safely(() => {
-    if (!isAuthorizedIpcSender(event.sender.id, allowedSenderIds())) throw new AppError('UNAUTHORIZED_IPC', 'Unauthorized renderer.');
-    return fn();
-  });
-}
+import { accountIdSchema, createAccountSchema, deleteAccountSchema, logFilterSchema, updateAccountSchema } from '@shared/schemas';
+import { parseOrThrow, registerAuthorizedHandler } from './authorized';
 
 export function registerIpc(service: AccountService, allowedSenderIds: () => ReadonlySet<number>): () => void {
-  const channels = ['accounts:list', 'accounts:create', 'accounts:update', 'accounts:open', 'accounts:close', 'accounts:health', 'accounts:delete', 'accounts:open-profile', 'logs:list'] as const;
-  ipcMain.handle('accounts:list', (event) => safelyFrom(event, allowedSenderIds, () => service.list()));
-  ipcMain.handle('accounts:create', (event, input: CreateAccountInput) => safelyFrom(event, allowedSenderIds, () => service.create(input)));
-  ipcMain.handle('accounts:update', (event, input: UpdateAccountInput) => safelyFrom(event, allowedSenderIds, () => service.update(input)));
-  ipcMain.handle('accounts:open', (event, id: string) => safelyFrom(event, allowedSenderIds, () => service.open(id)));
-  ipcMain.handle('accounts:close', (event, id: string) => safelyFrom(event, allowedSenderIds, () => service.close(id)));
-  ipcMain.handle('accounts:health', (event, id: string) => safelyFrom(event, allowedSenderIds, () => service.healthCheck(id)));
-  ipcMain.handle('accounts:delete', (event, input: DeleteAccountInput) => safelyFrom(event, allowedSenderIds, () => service.delete(input)));
-  ipcMain.handle('accounts:open-profile', (event, id: string) => safelyFrom(event, allowedSenderIds, () => service.openProfileFolder(id)));
-  ipcMain.handle('logs:list', (event, filter: unknown) => safelyFrom(event, allowedSenderIds, () => {
-    const parsed = logFilterSchema.safeParse(filter ?? {});
-    if (!parsed.success) throw new Error('Invalid log filter.');
-    return service.logs(parsed.data);
-  }));
+  const cleanups = [
+    registerAuthorizedHandler('accounts:list', allowedSenderIds, () => service.list()),
+    registerAuthorizedHandler('accounts:create', allowedSenderIds, (_event, input: unknown) => service.create(parseOrThrow(createAccountSchema.safeParse(input)))),
+    registerAuthorizedHandler('accounts:update', allowedSenderIds, (_event, input: unknown) => service.update(parseOrThrow(updateAccountSchema.safeParse(input)))),
+    registerAuthorizedHandler('accounts:open', allowedSenderIds, (_event, id: unknown) => service.open(parseOrThrow(accountIdSchema.safeParse(id)))),
+    registerAuthorizedHandler('accounts:close', allowedSenderIds, (_event, id: unknown) => service.close(parseOrThrow(accountIdSchema.safeParse(id)))),
+    registerAuthorizedHandler('accounts:health', allowedSenderIds, (_event, id: unknown) => service.healthCheck(parseOrThrow(accountIdSchema.safeParse(id)))),
+    registerAuthorizedHandler('accounts:delete', allowedSenderIds, (_event, input: unknown) => service.delete(parseOrThrow(deleteAccountSchema.safeParse(input)))),
+    registerAuthorizedHandler('accounts:open-profile', allowedSenderIds, (_event, id: unknown) => service.openProfileFolder(parseOrThrow(accountIdSchema.safeParse(id)))),
+    registerAuthorizedHandler('logs:list', allowedSenderIds, (_event, filter: unknown) => service.logs(parseOrThrow(logFilterSchema.safeParse(filter ?? {}))))
+  ];
 
-  return () => { for (const channel of channels) ipcMain.removeHandler(channel); };
+  return () => { for (const cleanup of cleanups) cleanup(); };
 }
 
 export function broadcastAccounts(service: AccountService): void {

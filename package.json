@@ -10,7 +10,7 @@
     "dev": "electron-vite dev",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "test": "vitest run",
+    "test": "node scripts/test-with-abi.cjs",
     "build": "electron-vite build && electron-builder --win nsis dir",
     "postinstall": "electron-builder install-app-deps && cross-env PLAYWRIGHT_BROWSERS_PATH=0 playwright install chromium"
   },

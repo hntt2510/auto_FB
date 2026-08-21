@@ -7,6 +7,7 @@ import { ProfileManager } from './ProfileManager';
 import { SecretStore, SecretStoreError } from '@main/security/SecretStore';
 import { SessionHealthService } from './SessionHealthService';
 import type { AccountStatus, FacebookAccount, HealthCheckResult } from '@shared/types';
+import { normalizeFacebookGroupUrl } from '@shared/groupUrl';
 
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= '0';
 
@@ -68,6 +69,33 @@ export class BrowserManager {
   async healthCheck(accountId: string): Promise<HealthCheckResult> {
     if (this.shuttingDown) throw new AppError('BROWSER_LAUNCH_FAILED', 'Browser manager is shutting down.');
     return this.enqueue(accountId, () => this.healthCheckInternal(accountId));
+  }
+
+  async navigateAccountPage(accountId: string, url: string): Promise<{ accountId: string; status: 'OPENED' | 'LOGIN_REQUIRED' | 'CHECKPOINT' | 'ERROR'; reason?: string }> {
+    return this.enqueue(accountId, () => this.navigateAccountPageInternal(accountId, url));
+  }
+
+  private async navigateAccountPageInternal(accountId: string, url: string): Promise<{ accountId: string; status: 'OPENED' | 'LOGIN_REQUIRED' | 'CHECKPOINT' | 'ERROR'; reason?: string }> {
+    if (this.shuttingDown) throw new AppError('BROWSER_LAUNCH_FAILED', 'Browser manager is shutting down.');
+    const normalized = normalizeFacebookGroupUrl(url).normalizedUrl;
+    let entry = this.contexts.get(accountId);
+    if (!entry) { await this.launch(this.requireAccount(accountId), false); entry = this.contexts.get(accountId); }
+    if (!entry) throw new AppError('BROWSER_LAUNCH_FAILED', 'Unable to open the account browser.');
+    const page = await entry.context.newPage();
+    try {
+      await page.goto(normalized, { waitUntil: 'domcontentloaded', timeout: 45000 });
+      const classification = await this.health.classify(page);
+      if (classification.status === 'LOGIN_REQUIRED' || classification.status === 'CHECKPOINT') {
+        const checkedAt = new Date().toISOString(); this.accounts.setHealth(accountId, classification.status, checkedAt, classification.reason);
+        return { accountId, status: classification.status, reason: classification.reason };
+      }
+      if (classification.status === 'ERROR') { const checkedAt = new Date().toISOString(); this.accounts.setHealth(accountId, 'ERROR', checkedAt, classification.reason); return { accountId, status: 'ERROR', reason: classification.reason }; }
+      return { accountId, status: 'OPENED' };
+    } catch (error) {
+      const reason = sanitizeMessage(error instanceof Error ? error.message : 'Facebook group could not be reached.');
+      this.accounts.setHealth(accountId, 'ERROR', new Date().toISOString(), reason);
+      return { accountId, status: 'ERROR', reason };
+    }
   }
 
   private async healthCheckInternal(accountId: string): Promise<HealthCheckResult> {

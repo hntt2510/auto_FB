@@ -11,11 +11,23 @@ import { AccountService } from './services/AccountService';
 import { broadcastAccounts, registerIpc } from './ipc/accounts.ipc';
 import type Database from 'better-sqlite3';
 import { isAllowedRendererUrl } from './security/navigationPolicy';
+import { registerMediaScheme, registerMediaProtocol } from './services/MediaProtocol';
+import { DraftRepository } from './db/repositories/DraftRepository';
+import { GroupRepository } from './db/repositories/GroupRepository';
+import { QueueRepository } from './db/repositories/QueueRepository';
+import { MediaStorageService } from './services/MediaStorageService';
+import { GroupService } from './services/GroupService';
+import { DraftService } from './services/DraftService';
+import { QueueService } from './services/QueueService';
+import { DashboardService } from './services/DashboardService';
+import { registerWorkspaceIpc } from './ipc/workspace.ipc';
 
 let service: AccountService | undefined;
 let cleanupIpc: (() => void) | undefined;
 let quitting = false;
 let database: Database.Database | undefined;
+
+registerMediaScheme();
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
@@ -30,6 +42,10 @@ if (!gotLock) {
     const audit = new AuditLogRepository(database);
     const settings = new SettingsRepository(database);
     const profiles = new ProfileManager(paths.profiles);
+    const groups = new GroupRepository(database);
+    const drafts = new DraftRepository(database);
+    const queue = new QueueRepository(database);
+    const media = new MediaStorageService(paths.media);
     service = new AccountService(accounts, audit, profiles, new SecretStore(settings, {
       isEncryptionAvailable: () => safeStorage.isEncryptionAvailable(),
       encryptString: (value) => safeStorage.encryptString(value),
@@ -37,6 +53,14 @@ if (!gotLock) {
     }), () => { if (service) broadcastAccounts(service); });
     createWindow();
     cleanupIpc = registerIpc(service, () => new Set(BrowserWindow.getAllWindows().map((current) => current.webContents.id)));
+    registerMediaProtocol(drafts, media);
+    const workspaceNotify = () => { /* workspace pages refetch after mutations */ };
+    cleanupIpc = chainCleanup(cleanupIpc, registerWorkspaceIpc({
+      groups: new GroupService(groups, accounts, queue, service.browser, audit, workspaceNotify),
+      drafts: new DraftService(drafts, queue, media, audit, workspaceNotify),
+      queue: new QueueService(queue, drafts, accounts, groups, media, audit, workspaceNotify),
+      dashboard: new DashboardService(database)
+    }, () => new Set(BrowserWindow.getAllWindows().map((current) => current.webContents.id))));
     app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
   }).catch((error) => {
     console.error('Application startup failed:', error instanceof Error ? error.message : error);
@@ -50,6 +74,10 @@ if (!gotLock) {
     void service.browser.closeAll().finally(() => { cleanupIpc?.(); database?.close(); app.quit(); });
   });
   app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+}
+
+function chainCleanup(first: () => void | undefined, second: () => void): () => void {
+  return () => { first?.(); second(); };
 }
 
 function createWindow(): BrowserWindow {

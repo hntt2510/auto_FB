@@ -42,6 +42,7 @@ Application data is stored below Electron's user data directory:
 {userData}/fb-account-manager/
 ├── app.db
 ├── profiles/
+├── media/
 └── logs/
 ```
 
@@ -55,6 +56,17 @@ Health checks classify the current Facebook page conservatively as `READY`, `LOG
 
 The application prevents duplicate launches with an application single-instance lock and an account lock. Locks are released on normal close, browser crash, failed startup, and application shutdown.
 
+## Content operations workspace
+
+The sidebar includes Dashboard, Accounts, Groups, Drafts, Queue, and Audit Logs. Goal 2 adds local group records, indexed tags, account/group assignments, a managed media library, explicit draft saving, and a reviewable queue of immutable snapshots.
+
+- Group URLs are normalized to `https://www.facebook.com/groups/{identifier}`. Group open is always a visible manual navigation through the selected assigned account; it never posts or publishes.
+- Draft media is copied into `{userData}/fb-account-manager/media`, checked by extension and file signature, and served to the renderer only through the confined `app-media://asset/{id}` protocol. Images are limited to 25 MiB and videos to 500 MiB.
+- Queue creation requires a READY draft and active account/group assignment. Items are `PENDING`, `PAUSED`, or `CANCELLED`; content and media are snapshotted at creation, so later draft edits do not change queued history.
+- Scheduled times are entered locally and stored as UTC ISO timestamps. Due items are labelled for review only; there is no executor or background publishing process.
+
+All workspace mutations are validated in the renderer and main process, use transactional repositories, and write concise audit events without draft bodies, media contents, cookies, tokens, or proxy passwords.
+
 ## Troubleshooting
 
 - **Account already running:** close the existing browser window or restart the application if a browser crashed before its close event was delivered.
@@ -65,4 +77,4 @@ The application prevents duplicate launches with an application single-instance 
 
 ## Scope
 
-This release intentionally stops at safe profile/account lifecycle management. Group Manager and Draft Queue are the next recommended milestone; auto-posting remains out of scope for V1.
+This release intentionally stops at safe account/profile lifecycle and manual content operations. Automatic publishing, comments, scraping, credential entry, CAPTCHA handling, stealth behavior, proxy rotation, and security bypasses remain out of scope.

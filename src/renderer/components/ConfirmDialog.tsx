@@ -1,0 +1,5 @@
+import type { FacebookAccount } from '@shared/types';
+
+export function ConfirmDialog({ account, busy, onCancel, onDeleteRecord, onDeleteProfile }: { account: FacebookAccount; busy: boolean; onCancel: () => void; onDeleteRecord: () => void; onDeleteProfile: () => void }) {
+  return <div className="modal-backdrop"><div className="modal confirm-modal"><div className="modal-header"><div><div className="eyebrow">DESTRUCTIVE ACTION</div><h2>Delete {account.name}?</h2></div><button className="close-button" onClick={onCancel}>×</button></div><p>Choose what happens to the persistent browser profile. This cannot be undone.</p><div className="delete-options"><button disabled={busy} onClick={onDeleteRecord}><strong>Delete database record only</strong><span>Keep <code>{account.profileName}</code> on disk for manual cleanup.</span></button><button className="delete-profile-option" disabled={busy} onClick={onDeleteProfile}><strong>Delete account + profile directory</strong><span>Permanently remove the controlled profile data and its database record.</span></button></div><button className="secondary full-width" disabled={busy} onClick={onCancel}>Cancel</button></div></div>;
+}

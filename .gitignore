@@ -1,0 +1,17 @@
+node_modules/
+dist/
+out/
+release/
+
+data/
+profiles/
+
+*.db
+*.db-shm
+*.db-wal
+
+.env
+.env.*
+
+playwright-report/
+test-results/

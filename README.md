@@ -2,7 +2,7 @@
 
 Facebook Account Manager is a local Windows desktop foundation for managing multiple Facebook accounts with isolated Playwright persistent browser profiles. V1 handles account records, fixed per-account network settings, safe browser lifecycle, conservative session health checks, and audit logs.
 
-It deliberately does **not** post, comment, scrape, rotate proxies, spoof fingerprints, bypass CAPTCHA/checkpoints, manipulate cookies, or automate Facebook login. Facebook username/password is **not stored by this application**.
+It uses only the visible Facebook web interface for explicitly enabled publishing. It does **not** comment, scrape, rotate proxies, spoof fingerprints, bypass CAPTCHA/checkpoints, manipulate cookies, or automate Facebook login. Facebook username/password is **not stored by this application**.
 
 ## Architecture
 
@@ -76,6 +76,16 @@ Each execution claims a queue row with a lease token, records an attempt timelin
 If the application closes during execution, the lease and attempt are recovered on the next startup as `NEEDS_ATTENTION`. Login, checkpoint, CAPTCHA, identity, recovery, and locked-account signals open an account publishing block and stop further execution until a successful manual health check clears it. Diagnostics are limited to bounded screenshots under the ignored diagnostics directory; no cookies, tokens, passwords, full page HTML, or media contents are stored.
 
 The Facebook composer adapter uses visible UI selectors that may change as Facebook changes. A failed or uncertain selector interaction is surfaced as a safe failure and requires manual review. There is no private API, scraping, stealth behavior, CAPTCHA bypass, credential entry, proxy rotation, or automated background Facebook activity.
+
+## Publishing safety and reconciliation
+
+Publishing has two independent controls: the engine switch and **Execution mode**. New installations default to `DRY_RUN`. Dry run opens the account, group, composer, textbox, managed media input, and scoped Post button, optionally fills the snapshot, records selector/preflight diagnostics, and stops before clicking Post. The scheduler never claims work while dry run is selected. Switching to `LIVE` requires an explicit confirmation and remains subject to the existing manual-run confirmation.
+
+`SUBMITTED` means Facebook accepted the submission interaction but this application did not verify public publication. `SUCCEEDED` requires a newly observed, current-group-correlated post link plus acceptance and matching content evidence. Existing post links are captured before submission and cannot be reused as proof. Ambiguous results become `NEEDS_ATTENTION`; they are never automatically retried.
+
+Terminal publishing changes are committed atomically with the receipt, attempt status, queue state, lease cleanup, timestamps, and terminal event. On restart, stale executions become `NEEDS_ATTENTION` with different guidance for interruption before or after the submit boundary. Operators can open the group, mark an item submitted, manually mark it verified with retained operator evidence, requeue it as a new snapshot, or retry only after acknowledging duplicate risk. Historical `SUBMITTED` items no longer block source deletion or active duplicate creation.
+
+Selector probes record the account, group, selector version, field-level `FOUND`/`MISSING`/`AMBIGUOUS` state, warnings, and timestamp. Diagnostics remain local, confined to the managed diagnostics root, bounded by retention, and can be deleted from attempt detail. No credentials, cookies, tokens, page HTML, or media contents are stored in probes, attempts, receipts, or audit logs.
 
 ## Troubleshooting
 

@@ -4,7 +4,7 @@ import type { PublishExecutor } from './PublishExecutor';
 import type { PublishingSettings, QueueItem } from '@shared/types';
 import { PublishCoordinator } from './PublishCoordinator';
 
-const settings: PublishingSettings = { enabled: true, schedulerIntervalSeconds: 30, maxConcurrentAccounts: 2, videoUploadTimeoutSeconds: 600 };
+const settings: PublishingSettings = { enabled: true, executionMode: 'LIVE', schedulerIntervalSeconds: 30, maxConcurrentAccounts: 2, videoUploadTimeoutSeconds: 600 };
 function item(id: string, accountId: string): QueueItem { return { id, accountId, groupId: crypto.randomUUID(), draftTitle: id, body: '', accountName: accountId, groupName: 'Group', groupUrl: 'https://www.facebook.com/groups/test', status: 'PENDING', media: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }; }
 
 describe('PublishCoordinator concurrency', () => {

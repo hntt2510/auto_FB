@@ -96,7 +96,7 @@ export class DraftRepository {
   }
   deleteAsset(id: string): void { this.db.prepare('DELETE FROM media_assets WHERE id = ?').run(id); }
   draftMediaAssetIds(draftId: string): string[] { return (this.db.prepare('SELECT media_id AS id FROM draft_media WHERE draft_id = ?').all(draftId) as { id: string }[]).map((row) => row.id); }
-  hasActiveQueueItems(id: string): boolean { return Boolean(this.db.prepare("SELECT 1 FROM queue_items WHERE draft_id = ? AND status IN ('PENDING', 'PAUSED', 'RUNNING', 'SUBMITTED', 'NEEDS_ATTENTION') LIMIT 1").get(id)); }
+  hasActiveQueueItems(id: string): boolean { return Boolean(this.db.prepare("SELECT 1 FROM queue_items WHERE draft_id = ? AND status IN ('PENDING', 'PAUSED', 'RUNNING', 'NEEDS_ATTENTION') LIMIT 1").get(id)); }
   delete(id: string): string[] {
     const assetIds = this.draftMediaAssetIds(id);
     this.db.prepare('DELETE FROM drafts WHERE id = ?').run(id);

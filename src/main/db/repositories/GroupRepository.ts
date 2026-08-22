@@ -119,7 +119,7 @@ export class GroupRepository {
   }
 
   hasActiveQueueItems(id: string): boolean {
-    return Boolean(this.db.prepare("SELECT 1 FROM queue_items WHERE group_id = ? AND status IN ('PENDING', 'PAUSED', 'RUNNING', 'SUBMITTED', 'NEEDS_ATTENTION') LIMIT 1").get(id));
+    return Boolean(this.db.prepare("SELECT 1 FROM queue_items WHERE group_id = ? AND status IN ('PENDING', 'PAUSED', 'RUNNING', 'NEEDS_ATTENTION') LIMIT 1").get(id));
   }
 
   delete(id: string): void { this.db.prepare('DELETE FROM groups WHERE id = ?').run(id); }

@@ -19,6 +19,8 @@ export class PublishDiagnostics {
     const safe = this.assertPath(path); const result = await shell.openPath(safe); if (result) throw new AppError('INVALID_PROFILE_PATH', 'Unable to open diagnostic screenshot.');
   }
 
+  async delete(path: string): Promise<void> { const safe = this.assertPath(path); await rm(safe, { force: true }); }
+
   assertPath(path: string): string {
     const root = this.assertRoot(); const target = resolve(path); const child = relative(root, target);
     if (!child || child.startsWith('..') || child.includes('\\') || child.includes('/') || basename(target) !== child) throw new AppError('INVALID_PROFILE_PATH', 'Diagnostic path is outside managed storage.');

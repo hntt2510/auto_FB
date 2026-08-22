@@ -245,6 +245,54 @@ export function runMigrations(db: Database.Database): void {
         blocked_at TEXT NOT NULL
       );
       CREATE INDEX idx_account_publish_blocks_reason ON account_publish_blocks(reason, blocked_at DESC);
+    `],
+    [4, `
+      ALTER TABLE publish_attempts ADD COLUMN execution_mode TEXT NOT NULL DEFAULT 'LIVE' CHECK (execution_mode IN ('DRY_RUN', 'LIVE'));
+      ALTER TABLE publish_attempts ADD COLUMN selector_version TEXT;
+      ALTER TABLE publish_attempts ADD COLUMN preflight INTEGER NOT NULL DEFAULT 0 CHECK (preflight IN (0, 1));
+      ALTER TABLE publish_receipts ADD COLUMN verification_source TEXT NOT NULL DEFAULT 'AUTOMATED' CHECK (verification_source IN ('AUTOMATED', 'OPERATOR'));
+      ALTER TABLE publish_receipts ADD COLUMN verification_evidence TEXT;
+      ALTER TABLE publish_receipts ADD COLUMN verified_at TEXT;
+
+      DROP INDEX IF EXISTS idx_queue_active_duplicate;
+      CREATE UNIQUE INDEX idx_queue_active_duplicate ON queue_items(draft_id, snapshot_hash, account_id, group_id, IFNULL(scheduled_at, ''))
+        WHERE status IN ('PENDING', 'PAUSED', 'RUNNING', 'NEEDS_ATTENTION');
+
+      CREATE TABLE publish_reconciliations (
+        id TEXT PRIMARY KEY,
+        queue_item_id TEXT NOT NULL REFERENCES queue_items(id) ON DELETE CASCADE,
+        attempt_id TEXT REFERENCES publish_attempts(id) ON DELETE SET NULL,
+        action TEXT NOT NULL CHECK (action IN ('MARK_SUBMITTED', 'MARK_VERIFIED')),
+        evidence TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_publish_reconciliations_queue ON publish_reconciliations(queue_item_id, created_at DESC);
+
+      CREATE TABLE selector_probes (
+        id TEXT PRIMARY KEY,
+        account_id TEXT REFERENCES accounts(id) ON DELETE SET NULL,
+        group_id TEXT REFERENCES groups(id) ON DELETE SET NULL,
+        selector_version TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('FOUND', 'MISSING', 'AMBIGUOUS', 'NOT_TESTED')),
+        details_json TEXT NOT NULL,
+        checked_at TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_selector_probes_target ON selector_probes(account_id, group_id, checked_at DESC);
+
+      CREATE TABLE publish_preflights (
+        id TEXT PRIMARY KEY,
+        queue_item_id TEXT REFERENCES queue_items(id) ON DELETE SET NULL,
+        account_id TEXT REFERENCES accounts(id) ON DELETE SET NULL,
+        group_id TEXT REFERENCES groups(id) ON DELETE SET NULL,
+        execution_mode TEXT NOT NULL CHECK (execution_mode IN ('DRY_RUN', 'LIVE')),
+        selector_version TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('PASSED', 'FAILED', 'AMBIGUOUS')),
+        details_json TEXT NOT NULL,
+        checked_at TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_publish_preflights_queue ON publish_preflights(queue_item_id, checked_at DESC);
     `]
   ];
 

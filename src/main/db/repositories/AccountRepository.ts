@@ -82,7 +82,7 @@ export class AccountRepository {
   }
 
   hasActiveQueueItems(id: string): boolean {
-    const row = this.db.prepare("SELECT 1 AS present FROM queue_items WHERE account_id = ? AND status IN ('PENDING', 'PAUSED', 'RUNNING', 'SUBMITTED', 'NEEDS_ATTENTION') LIMIT 1").get(id) as { present: number } | undefined;
+    const row = this.db.prepare("SELECT 1 AS present FROM queue_items WHERE account_id = ? AND status IN ('PENDING', 'PAUSED', 'RUNNING', 'NEEDS_ATTENTION') LIMIT 1").get(id) as { present: number } | undefined;
     return Boolean(row);
   }
 

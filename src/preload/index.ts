@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AccountApi, AssignmentAccount, AuditLog, CreateAccountInput, DashboardApi, DashboardSummary, DeleteAccountInput, Draft, DraftApi, DraftFilter, DraftInput, DraftMedia, DraftStatus, FacebookAccount, FacebookGroup, GroupApi, GroupFilter, GroupImportPreview, GroupImportResult, GroupInput, GroupOpenResult, HealthCheckResult, LogApi, LogFilter, MediaReorderInput, PublishApi, PublishAttempt, PublishingEngineStatus, PublishingRunResult, PublishingSettings, PublishingSettingsApi, QueueApi, QueueBatchInput, QueueFilter, QueueItem, QueueOptions, QueuePreview, RequeueInput, UpdateAccountInput } from '@shared/types';
+import type { AccountApi, AssignmentAccount, AuditLog, CreateAccountInput, DashboardApi, DashboardSummary, DeleteAccountInput, Draft, DraftApi, DraftFilter, DraftInput, DraftMedia, DraftStatus, FacebookAccount, FacebookGroup, GroupApi, GroupFilter, GroupImportPreview, GroupImportResult, GroupInput, GroupOpenResult, HealthCheckResult, LogApi, LogFilter, MediaReorderInput, PreflightResult, PublishApi, PublishAttempt, PublishingEngineStatus, PublishingRunResult, PublishingSettings, PublishingSettingsApi, PublishingSettingsUpdate, QueueApi, QueueBatchInput, QueueFilter, QueueItem, QueueOptions, QueuePreview, ReconciliationRecord, RequeueInput, SelectorProbeResult, UpdateAccountInput } from '@shared/types';
 
 type IpcResponse<T> = { ok: true; data: T } | { ok: false; error: { code: string; message: string } };
 
@@ -85,13 +85,19 @@ const publishApi: PublishApi = {
   retry: (queueId: string, acknowledgeDuplicateRisk: boolean) => invoke<QueueItem>('publishing:retry', { queueId, acknowledgeDuplicateRisk }),
   requeue: (input: RequeueInput) => invoke<QueueItem>('publishing:requeue', input),
   resolve: (queueId: string) => invoke<QueueItem>('publishing:resolve', queueId),
+  markSubmitted: (queueId: string) => invoke<QueueItem>('publishing:mark-submitted', queueId),
+  markVerified: (queueId: string, evidence?: string) => invoke<QueueItem>('publishing:mark-verified', { queueId, evidence }),
+  preflight: (queueId: string) => invoke<PreflightResult>('publishing:preflight', queueId),
+  probe: (accountId: string, groupId: string) => invoke<SelectorProbeResult>('publishing:probe', { accountId, groupId }),
+  reconciliations: (queueId: string) => invoke<ReconciliationRecord[]>('publishing:reconciliations', queueId),
   openDiagnostic: (attemptId: string) => invoke<void>('publishing:open-diagnostic', attemptId),
+  deleteDiagnostic: (attemptId: string) => invoke<void>('publishing:delete-diagnostic', attemptId),
   onChanged: (listener: () => void) => { const callback = () => listener(); ipcRenderer.on('publishing:changed', callback); return () => ipcRenderer.removeListener('publishing:changed', callback); }
 };
 
 const settingsApi: PublishingSettingsApi = {
   getPublishing: () => invoke<PublishingSettings>('settings:get-publishing'),
-  updatePublishing: (input: PublishingSettings) => invoke<PublishingSettings>('settings:update-publishing', input)
+  updatePublishing: (input: PublishingSettingsUpdate) => invoke<PublishingSettings>('settings:update-publishing', input)
 };
 
 contextBridge.exposeInMainWorld('accountApi', accountApi);

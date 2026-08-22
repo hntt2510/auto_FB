@@ -16,7 +16,7 @@ export class PublishScheduler {
   isRunning(): boolean { return this.started; }
   isTicking(): boolean { return this.ticking; }
 
-  async runDue(): Promise<PublishingRunResult> { const due = this.queue.due(new Date().toISOString()).map((item) => item.id); return this.coordinator.run(due, this.settings.get()); }
+  async runDue(): Promise<PublishingRunResult> { const due = this.queue.due(new Date().toISOString()).map((item) => item.id); const settings = this.settings.get(); if (settings.executionMode !== 'LIVE') return { requested: due.length, claimed: 0, completed: 0, skipped: due.length }; return this.coordinator.run(due, settings); }
 
   private schedule(): void {
     if (!this.started) return; this.timer = setTimeout(() => { void this.tick(); }, this.settings.get().schedulerIntervalSeconds * 1000);
@@ -25,7 +25,7 @@ export class PublishScheduler {
   private async tick(): Promise<void> {
     if (!this.started) return; if (this.ticking) { this.schedule(); return; }
     this.ticking = true; this.onChangedSafe();
-    try { const settings = this.settings.get(); if (settings.enabled) { const due = this.queue.due(new Date().toISOString()).map((item) => item.id); if (due.length) await this.coordinator.run(due, settings); } }
+    try { const settings = this.settings.get(); if (settings.enabled && settings.executionMode === 'LIVE') { const due = this.queue.due(new Date().toISOString()).map((item) => item.id); if (due.length) await this.coordinator.run(due, settings); } }
     finally { this.ticking = false; this.onChangedSafe(); this.schedule(); }
   }
 

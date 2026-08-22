@@ -9,5 +9,7 @@ describe('PublishingSettingsService', () => {
     expect(service.get()).toEqual(DEFAULT_PUBLISHING_SETTINGS);
     expect(() => service.update({ ...DEFAULT_PUBLISHING_SETTINGS, schedulerIntervalSeconds: 10 })).toThrow();
     expect(service.update({ ...DEFAULT_PUBLISHING_SETTINGS, enabled: true }).enabled).toBe(true); expect(audit.add).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'PUBLISH_ENGINE_ENABLED' })); expect(changed).toHaveBeenCalled();
+    expect(() => service.update({ ...DEFAULT_PUBLISHING_SETTINGS, executionMode: 'LIVE' })).toThrow();
+    expect(service.update({ ...DEFAULT_PUBLISHING_SETTINGS, executionMode: 'LIVE', confirmLive: true }).executionMode).toBe('LIVE');
   });
 });

@@ -74,7 +74,7 @@ if (!gotLock) {
     coordinator = new PublishCoordinator(queue, executor);
     const publishingSettings = new PublishingSettingsService(settings, audit, () => { scheduler?.reconfigure(); workspaceNotify(); });
     scheduler = new PublishScheduler(queue, coordinator, publishingSettings, workspaceNotify);
-    publishing = new PublishingService(queue, publishRepository, accounts, groups, media, coordinator, scheduler, publishingSettings, diagnostics, audit, workspaceNotify);
+    publishing = new PublishingService(queue, publishRepository, accounts, groups, media, executor, coordinator, scheduler, publishingSettings, diagnostics, audit, workspaceNotify);
     publishing.recover(); service.setHealthObserver((result) => publishing?.handleHealthResult(result)); scheduler.start();
     cleanupIpc = chainCleanup(cleanupIpc, registerWorkspaceIpc({
       groups: new GroupService(groups, accounts, queue, service.browser, audit, workspaceNotify),

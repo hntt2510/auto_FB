@@ -46,11 +46,11 @@ export class QueueRepository {
     return items.map((item) => this.get(item.id)!);
   }
 
-  hasActiveForAccount(id: string): boolean { return Boolean(this.db.prepare("SELECT 1 FROM queue_items WHERE account_id = ? AND status IN ('PENDING', 'PAUSED', 'RUNNING', 'SUBMITTED', 'NEEDS_ATTENTION') LIMIT 1").get(id)); }
-  hasActiveForGroup(id: string): boolean { return Boolean(this.db.prepare("SELECT 1 FROM queue_items WHERE group_id = ? AND status IN ('PENDING', 'PAUSED', 'RUNNING', 'SUBMITTED', 'NEEDS_ATTENTION') LIMIT 1").get(id)); }
-  hasActiveForDraft(id: string): boolean { return Boolean(this.db.prepare("SELECT 1 FROM queue_items WHERE draft_id = ? AND status IN ('PENDING', 'PAUSED', 'RUNNING', 'SUBMITTED', 'NEEDS_ATTENTION') LIMIT 1").get(id)); }
+  hasActiveForAccount(id: string): boolean { return Boolean(this.db.prepare("SELECT 1 FROM queue_items WHERE account_id = ? AND status IN ('PENDING', 'PAUSED', 'RUNNING', 'NEEDS_ATTENTION') LIMIT 1").get(id)); }
+  hasActiveForGroup(id: string): boolean { return Boolean(this.db.prepare("SELECT 1 FROM queue_items WHERE group_id = ? AND status IN ('PENDING', 'PAUSED', 'RUNNING', 'NEEDS_ATTENTION') LIMIT 1").get(id)); }
+  hasActiveForDraft(id: string): boolean { return Boolean(this.db.prepare("SELECT 1 FROM queue_items WHERE draft_id = ? AND status IN ('PENDING', 'PAUSED', 'RUNNING', 'NEEDS_ATTENTION') LIMIT 1").get(id)); }
   hasDuplicate(draftId: string, hash: string, accountId: string, groupId: string, scheduledAt?: string): boolean {
-    return Boolean(this.db.prepare("SELECT 1 FROM queue_items WHERE draft_id = ? AND snapshot_hash = ? AND account_id = ? AND group_id = ? AND IFNULL(scheduled_at, '') = IFNULL(?, '') AND status IN ('PENDING', 'PAUSED', 'RUNNING', 'SUBMITTED', 'NEEDS_ATTENTION') LIMIT 1").get(draftId, hash, accountId, groupId, scheduledAt ?? null));
+    return Boolean(this.db.prepare("SELECT 1 FROM queue_items WHERE draft_id = ? AND snapshot_hash = ? AND account_id = ? AND group_id = ? AND IFNULL(scheduled_at, '') = IFNULL(?, '') AND status IN ('PENDING', 'PAUSED', 'RUNNING', 'NEEDS_ATTENTION') LIMIT 1").get(draftId, hash, accountId, groupId, scheduledAt ?? null));
   }
 
   updateState(id: string, action: 'PAUSE' | 'RESUME' | 'CANCEL'): QueueRecord {
@@ -110,7 +110,7 @@ export class QueueRepository {
   requeue(sourceId: string, newId: string, scheduledAt: string | undefined, timestamp: string): QueueRecord {
     this.db.transaction(() => {
       const source = this.db.prepare('SELECT * FROM queue_items WHERE id = ?').get(sourceId) as QueueRow | undefined;
-      if (!source || !['FAILED', 'SUCCEEDED', 'CANCELLED'].includes(source.status)) throw new Error('Only failed, succeeded, or cancelled queue items can be requeued.');
+      if (!source || !['SUBMITTED', 'FAILED', 'SUCCEEDED', 'CANCELLED'].includes(source.status)) throw new Error('Only submitted, failed, succeeded, or cancelled queue items can be requeued.');
       if (!source.account_id || !source.group_id) throw new Error('The original target no longer exists.');
       this.db.prepare(`INSERT INTO queue_items (id, draft_id, account_id, group_id, draft_title_snapshot, body_snapshot, link_url_snapshot, account_name_snapshot, group_name_snapshot, group_url_snapshot, snapshot_hash, status, scheduled_at, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?)`).run(newId, source.draft_id, source.account_id, source.group_id, source.draft_title_snapshot, source.body_snapshot, source.link_url_snapshot, source.account_name_snapshot, source.group_name_snapshot, source.group_url_snapshot, source.snapshot_hash, scheduledAt ?? null, timestamp, timestamp);
@@ -139,8 +139,8 @@ export class QueueRepository {
     if (!rows.length) return rows; const placeholders = rows.map(() => '?').join(',');
     const latest = this.db.prepare(`SELECT pa.*, pr.result, EXISTS (SELECT 1 FROM publish_attempt_events pae WHERE pae.attempt_id = pa.id AND pae.event_type IN ('SUBMITTING', 'POST_CLICKED', 'SUBMITTED', 'VERIFIED')) AS irreversible
       FROM publish_attempts pa LEFT JOIN publish_receipts pr ON pr.attempt_id = pa.id
-      JOIN (SELECT queue_item_id, MAX(attempt_number) AS attempt_number FROM publish_attempts WHERE queue_item_id IN (${placeholders}) GROUP BY queue_item_id) x ON x.queue_item_id = pa.queue_item_id AND x.attempt_number = pa.attempt_number`).all(...rows.map((row) => row.id)) as Array<{ id: string; queue_item_id: string; account_id: string | null; group_id: string | null; attempt_number: number; status: import('@shared/types').PublishAttemptStatus; error_code: string | null; error_message: string | null; started_at: string; finished_at: string | null; result: import('@shared/types').PublishReceiptResult | null; irreversible: number }>;
-    const byQueue = new Map(latest.map((row) => [row.queue_item_id, { id: row.id, queueItemId: row.queue_item_id, accountId: row.account_id ?? undefined, groupId: row.group_id ?? undefined, attemptNumber: row.attempt_number, status: row.status, errorCode: row.error_code ?? undefined, errorMessage: row.error_message ?? undefined, startedAt: row.started_at, finishedAt: row.finished_at ?? undefined, irreversibleReached: Boolean(row.irreversible), result: row.result ?? undefined }]));
+      JOIN (SELECT queue_item_id, MAX(attempt_number) AS attempt_number FROM publish_attempts WHERE queue_item_id IN (${placeholders}) GROUP BY queue_item_id) x ON x.queue_item_id = pa.queue_item_id AND x.attempt_number = pa.attempt_number`).all(...rows.map((row) => row.id)) as Array<{ id: string; queue_item_id: string; account_id: string | null; group_id: string | null; attempt_number: number; status: import('@shared/types').PublishAttemptStatus; error_code: string | null; error_message: string | null; execution_mode: import('@shared/types').ExecutionMode; selector_version: string | null; preflight: number; started_at: string; finished_at: string | null; result: import('@shared/types').PublishReceiptResult | null; irreversible: number }>;
+    const byQueue = new Map(latest.map((row) => [row.queue_item_id, { id: row.id, queueItemId: row.queue_item_id, accountId: row.account_id ?? undefined, groupId: row.group_id ?? undefined, attemptNumber: row.attempt_number, status: row.status, errorCode: row.error_code ?? undefined, errorMessage: row.error_message ?? undefined, startedAt: row.started_at, finishedAt: row.finished_at ?? undefined, irreversibleReached: Boolean(row.irreversible), result: row.result ?? undefined, executionMode: row.execution_mode, selectorVersion: row.selector_version ?? undefined, preflight: Boolean(row.preflight) }]));
     return rows.map((row) => ({ ...row, latestAttempt: byQueue.get(row.id) }));
   }
 }

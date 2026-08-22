@@ -180,10 +180,17 @@ export type MediaReorderInput = { draftId: string; mediaIds: string[] };
 export type QueueStatus = 'PENDING' | 'PAUSED' | 'RUNNING' | 'SUBMITTED' | 'SUCCEEDED' | 'FAILED' | 'NEEDS_ATTENTION' | 'CANCELLED';
 export type PublishAttemptStatus = 'STARTING' | 'COMPOSER_OPENED' | 'CONTENT_FILLED' | 'MEDIA_UPLOADED' | 'SUBMITTING' | 'SUBMITTED' | 'SUCCEEDED' | 'FAILED' | 'NEEDS_ATTENTION';
 export type PublishReceiptResult = 'SUBMITTED' | 'SUBMITTED_PENDING_APPROVAL' | 'VERIFIED_PUBLISHED' | 'UNKNOWN';
+export type ExecutionMode = 'DRY_RUN' | 'LIVE';
+export type SelectorProbeStatus = 'FOUND' | 'MISSING' | 'AMBIGUOUS' | 'NOT_TESTED';
+export type SelectorProbeField = { status: SelectorProbeStatus; count?: number; reason?: string };
+export type SelectorProbeResult = { id?: string; accountId: string; groupId: string; selectorVersion: string; status: SelectorProbeStatus; session: SelectorProbeField; group: SelectorProbeField; composerTrigger: SelectorProbeField; composerTextbox: SelectorProbeField; mediaInput: SelectorProbeField; postButton: SelectorProbeField; uploadBusy: SelectorProbeField; approvalSignal: SelectorProbeField; acceptanceSignal: SelectorProbeField; checkedAt: string; warnings: string[] };
+export type PreflightResult = SelectorProbeResult & { queueItemId: string; accountReady: boolean; groupOpened: boolean; composerFound: boolean; textboxFound: boolean; mediaInputFound?: boolean; postButtonFound: boolean; passed: boolean; filledContent: boolean };
+export type ReconciliationAction = 'MARK_SUBMITTED' | 'MARK_VERIFIED';
+export type ReconciliationRecord = { id: string; queueItemId: string; attemptId?: string; action: ReconciliationAction; evidence: string; createdAt: string };
 export type PublishAttemptEvent = { id: string; attemptId: string; sequence: number; eventType: string; message?: string; createdAt: string };
-export type PublishReceipt = { id: string; queueItemId: string; attemptId: string; result: PublishReceiptResult; groupUrl: string; postUrl?: string; evidence?: string; submittedAt: string; createdAt: string };
-export type PublishAttempt = { id: string; queueItemId: string; accountId?: string; groupId?: string; attemptNumber: number; status: PublishAttemptStatus; errorCode?: string; errorMessage?: string; diagnosticAvailable: boolean; startedAt: string; finishedAt?: string; createdAt: string; events: PublishAttemptEvent[]; receipt?: PublishReceipt; irreversibleReached: boolean };
-export type PublishAttemptSummary = Pick<PublishAttempt, 'id' | 'queueItemId' | 'accountId' | 'groupId' | 'attemptNumber' | 'status' | 'errorCode' | 'errorMessage' | 'startedAt' | 'finishedAt' | 'irreversibleReached'> & { result?: PublishReceiptResult };
+export type PublishReceipt = { id: string; queueItemId: string; attemptId: string; result: PublishReceiptResult; groupUrl: string; postUrl?: string; evidence?: string; submittedAt: string; createdAt: string; verificationSource: 'AUTOMATED' | 'OPERATOR'; verificationEvidence?: string; verifiedAt?: string };
+export type PublishAttempt = { id: string; queueItemId: string; accountId?: string; groupId?: string; attemptNumber: number; status: PublishAttemptStatus; errorCode?: string; errorMessage?: string; diagnosticAvailable: boolean; startedAt: string; finishedAt?: string; createdAt: string; events: PublishAttemptEvent[]; receipt?: PublishReceipt; irreversibleReached: boolean; executionMode: ExecutionMode; selectorVersion?: string; preflight: boolean };
+export type PublishAttemptSummary = Pick<PublishAttempt, 'id' | 'queueItemId' | 'accountId' | 'groupId' | 'attemptNumber' | 'status' | 'errorCode' | 'errorMessage' | 'startedAt' | 'finishedAt' | 'irreversibleReached' | 'executionMode' | 'selectorVersion' | 'preflight'> & { result?: PublishReceiptResult };
 export type QueueTarget = { accountId: string; groupId: string };
 export type QueueItem = {
   id: string;
@@ -266,10 +273,11 @@ export type QueueApi = {
 
 export type DashboardApi = { summary: () => Promise<DashboardSummary> };
 
-export type PublishingSettings = { enabled: boolean; schedulerIntervalSeconds: number; maxConcurrentAccounts: number; videoUploadTimeoutSeconds: number };
+export type PublishingSettings = { enabled: boolean; executionMode: ExecutionMode; schedulerIntervalSeconds: number; maxConcurrentAccounts: number; videoUploadTimeoutSeconds: number };
 export type PublishingBlock = { accountId: string; accountName: string; reason: 'LOGIN_REQUIRED' | 'CHECKPOINT'; message: string; blockedAt: string };
 export type PublishingRunResult = { requested: number; claimed: number; completed: number; skipped: number };
-export type PublishingEngineStatus = { settings: PublishingSettings; schedulerRunning: boolean; tickRunning: boolean; running: QueueItem[]; blockedAccounts: PublishingBlock[]; recentAttempts: PublishAttemptSummary[]; dueCount: number };
+export type PublishingReadiness = 'NOT_READY' | 'PREFLIGHT_READY' | 'LIVE_ENABLED' | 'DEGRADED';
+export type PublishingEngineStatus = { settings: PublishingSettings; schedulerRunning: boolean; tickRunning: boolean; running: QueueItem[]; blockedAccounts: PublishingBlock[]; recentAttempts: PublishAttemptSummary[]; dueCount: number; selectorVersion: string; readiness: PublishingReadiness; recentProbes: SelectorProbeResult[] };
 export type RequeueInput = { queueId: string; scheduledAt?: string };
 
 export type PublishApi = {
@@ -281,10 +289,17 @@ export type PublishApi = {
   retry: (queueId: string, acknowledgeDuplicateRisk: boolean) => Promise<QueueItem>;
   requeue: (input: RequeueInput) => Promise<QueueItem>;
   resolve: (queueId: string) => Promise<QueueItem>;
+  markSubmitted: (queueId: string) => Promise<QueueItem>;
+  markVerified: (queueId: string, evidence?: string) => Promise<QueueItem>;
+  preflight: (queueId: string) => Promise<PreflightResult>;
+  probe: (accountId: string, groupId: string) => Promise<SelectorProbeResult>;
+  reconciliations: (queueId: string) => Promise<ReconciliationRecord[]>;
   openDiagnostic: (attemptId: string) => Promise<void>;
+  deleteDiagnostic: (attemptId: string) => Promise<void>;
   onChanged: (listener: () => void) => () => void;
 };
 
-export type PublishingSettingsApi = { getPublishing: () => Promise<PublishingSettings>; updatePublishing: (input: PublishingSettings) => Promise<PublishingSettings> };
+export type PublishingSettingsUpdate = PublishingSettings & { confirmLive?: boolean };
+export type PublishingSettingsApi = { getPublishing: () => Promise<PublishingSettings>; updatePublishing: (input: PublishingSettingsUpdate) => Promise<PublishingSettings> };
 
 export type WorkspaceApi = { groupApi: GroupApi; draftApi: DraftApi; queueApi: QueueApi; dashboardApi: DashboardApi; publishApi: PublishApi; settingsApi: PublishingSettingsApi };

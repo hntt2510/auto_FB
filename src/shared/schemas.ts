@@ -89,7 +89,9 @@ export const queueStateSchema = z.object({ queueId: queueIdSchema });
 export const publishRunSelectedSchema = z.object({ queueIds: z.array(queueIdSchema).min(1).max(100).transform((ids) => [...new Set(ids)]) });
 export const publishRetrySchema = z.object({ queueId: queueIdSchema, acknowledgeDuplicateRisk: z.boolean() });
 export const publishRequeueSchema = z.object({ queueId: queueIdSchema, scheduledAt: z.string().datetime().refine((value) => value.endsWith('Z'), 'Schedule must be UTC.').optional() });
-export const publishingSettingsSchema = z.object({ enabled: z.boolean(), schedulerIntervalSeconds: z.number().int().min(15).max(300), maxConcurrentAccounts: z.number().int().min(1).max(3), videoUploadTimeoutSeconds: z.number().int().min(60).max(1800) });
+export const publishMarkVerifiedSchema = z.object({ queueId: queueIdSchema, evidence: z.string().trim().min(1).max(500).optional() });
+export const publishingSettingsSchema = z.object({ enabled: z.boolean(), executionMode: z.enum(['DRY_RUN', 'LIVE']), schedulerIntervalSeconds: z.number().int().min(15).max(300), maxConcurrentAccounts: z.number().int().min(1).max(3), videoUploadTimeoutSeconds: z.number().int().min(60).max(1800) });
+export const publishingSettingsUpdateSchema = publishingSettingsSchema.extend({ confirmLive: z.boolean().optional() });
 
 export type CreateAccountData = z.infer<typeof createAccountSchema>;
 export type UpdateAccountData = z.infer<typeof updateAccountSchema>;

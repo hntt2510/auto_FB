@@ -2,10 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Locator, Page } from 'playwright';
 import type { QueueRecord } from '@main/db/repositories/QueueRepository';
 import { FacebookComposerAdapter, candidateContentMatches, correlateNewPostUrl, hasPublishableContent, normalizePostCandidateUrl, probePostButton } from './FacebookComposerAdapter';
+import { FACEBOOK_SELECTORS_VERSION, facebookText } from './selectors/facebookSelectors';
 
 type FakeState = { text: string; fillCount: number; insertCount: number; fillEnables: boolean; fillUpdates: boolean; fallbackEnables: boolean; fallbackUpdates: boolean; enabled: boolean };
+type TriggerDescriptor = { role: string; tag: string; ariaLabel?: string; title?: string; text?: string };
 
-function fakeComposer(state: FakeState): { page: Page; textbox: Locator; container: Locator; post: Locator } {
+function fakeComposer(state: FakeState, descriptor: TriggerDescriptor = { role: 'button', tag: 'DIV', ariaLabel: 'Bạn viết gì đi...', text: 'Bạn viết gì đi...' }): { page: Page; textbox: Locator; container: Locator; post: Locator } {
   const post = {
     count: vi.fn(async () => 1),
     nth: vi.fn(() => post),
@@ -13,10 +15,14 @@ function fakeComposer(state: FakeState): { page: Page; textbox: Locator; contain
     isEnabled: vi.fn(async () => state.enabled),
     click: vi.fn(async () => undefined)
   } as unknown as Locator;
-  const empty = { count: vi.fn(async () => 0), nth: vi.fn(() => empty), isVisible: vi.fn(async () => false) } as unknown as Locator;
-  const trigger = { count: vi.fn(async () => 1), nth: vi.fn(() => trigger), isVisible: vi.fn(async () => true), click: vi.fn(async () => undefined) } as unknown as Locator;
-  const page = { getByRole: vi.fn(() => trigger), locator: vi.fn(() => ({ filter: vi.fn(() => empty) })), keyboard: { insertText: vi.fn(async (value: string) => { state.insertCount += 1; if (state.fallbackUpdates) state.text = value; state.enabled = state.fallbackEnables; }), press: vi.fn(async () => undefined) } } as unknown as Page;
+  const empty = { count: vi.fn(async () => 0), nth: vi.fn(() => empty), isVisible: vi.fn(async () => false), locator: vi.fn(() => empty), getByRole: vi.fn(() => empty), getByText: vi.fn(() => empty) } as unknown as Locator;
+  const trigger = { count: vi.fn(async () => 1), nth: vi.fn(() => trigger), isVisible: vi.fn(async () => true), click: vi.fn(async () => undefined), getAttribute: vi.fn(async (name: string) => name === 'role' ? descriptor.role : name === 'aria-label' ? descriptor.ariaLabel ?? '' : name === 'title' ? descriptor.title ?? '' : ''), evaluate: vi.fn(async () => descriptor.tag), innerText: vi.fn(async () => descriptor.text ?? ''), textContent: vi.fn(async () => descriptor.text ?? '') } as unknown as Locator;
+  const mainScope = { count: vi.fn(async () => 1), nth: vi.fn(() => mainScope), isVisible: vi.fn(async () => true), locator: vi.fn((selector: string) => selector === 'button, [role="button"], [tabindex="0"]' || selector === 'button' || selector === '[role="button"]' || selector === '[tabindex="0"]' ? trigger : empty) } as unknown as Locator;
+  const page = { getByRole: vi.fn(() => trigger), locator: vi.fn((selector: string) => selector === 'main' || selector === '[role="main"]' ? mainScope : selector === 'body' ? mainScope : ({ filter: vi.fn(() => empty), count: vi.fn(async () => 0), nth: vi.fn(() => empty), isVisible: vi.fn(async () => false) })), keyboard: { insertText: vi.fn(async (value: string) => { state.insertCount += 1; if (state.fallbackUpdates) state.text = value; state.enabled = state.fallbackEnables; }), press: vi.fn(async () => undefined) } } as unknown as Page;
   const textbox = {
+    count: vi.fn(async () => 1),
+    nth: vi.fn(() => textbox),
+    isVisible: vi.fn(async () => true),
     fill: vi.fn(async (value: string) => { state.fillCount += 1; if (state.fillUpdates) state.text = value; state.enabled = state.fillEnables; }),
     getAttribute: vi.fn(async (name: string) => name === 'contenteditable' ? 'true' : null),
     evaluate: vi.fn(async () => 'DIV'),
@@ -27,12 +33,23 @@ function fakeComposer(state: FakeState): { page: Page; textbox: Locator; contain
     page: vi.fn(() => page)
   } as unknown as Locator;
   const container = {
-    getByRole: vi.fn((_role: string, options?: { name?: unknown }) => String(options?.name ?? '').toLowerCase().includes('post') ? post : empty),
-    locator: vi.fn((selector: string) => selector.includes('input[type="file"]') ? empty : { filter: vi.fn(() => empty) }),
+    getByRole: vi.fn((role: string, options?: { name?: unknown }) => role === 'textbox' ? textbox : String(options?.name ?? '').toLowerCase().includes('post') ? post : empty),
+    locator: vi.fn((selector: string) => selector.includes('input[type="file"]') ? empty : selector.includes('contenteditable') ? textbox : { filter: vi.fn(() => empty) }),
     getByText: vi.fn(() => empty),
     isVisible: vi.fn(async () => true)
   } as unknown as Locator;
   return { page, textbox, container, post };
+}
+
+function resolverPage(descriptors: TriggerDescriptor[]): Page {
+  const locators = descriptors.map((descriptor) => ({
+    count: vi.fn(async () => 1), nth: vi.fn(() => locators[descriptors.indexOf(descriptor)]), isVisible: vi.fn(async () => true),
+    getAttribute: vi.fn(async (name: string) => name === 'role' ? descriptor.role : name === 'aria-label' ? descriptor.ariaLabel ?? '' : name === 'title' ? descriptor.title ?? '' : ''),
+    evaluate: vi.fn(async () => descriptor.tag), innerText: vi.fn(async () => descriptor.text ?? ''), textContent: vi.fn(async () => descriptor.text ?? '')
+  } as unknown as Locator));
+  const collection = { count: vi.fn(async () => locators.length), nth: vi.fn((index: number) => locators[index]) } as unknown as Locator;
+  const scope = { count: vi.fn(async () => 1), nth: vi.fn(() => scope), isVisible: vi.fn(async () => true), locator: vi.fn(() => collection) } as unknown as Locator;
+  return { locator: vi.fn((selector: string) => selector === 'main' || selector === '[role="main"]' || selector === 'body' ? scope : collection) } as unknown as Page;
 }
 
 function queueItem(body: string, linkUrl?: string): QueueRecord {
@@ -47,7 +64,70 @@ function adapterFor(fake: ReturnType<typeof fakeComposer>): FacebookComposerAdap
   return adapter;
 }
 
+function actualAdapterFor(fake: ReturnType<typeof fakeComposer>): FacebookComposerAdapter {
+  let opened = false;
+  const page = fake.page as Page & { locator: ReturnType<typeof vi.fn>; getByRole: ReturnType<typeof vi.fn> };
+  const trigger = page.getByRole();
+  trigger.click.mockImplementation(async () => { opened = true; });
+  const dialog = { count: vi.fn(async () => opened ? 1 : 0), nth: vi.fn(() => fake.container), isVisible: vi.fn(async () => opened) } as unknown as Locator;
+  const originalLocator = page.locator;
+  page.locator = vi.fn((selector: string) => selector === '[role="dialog"]' ? dialog : selector === 'form' ? { count: vi.fn(async () => 0), nth: vi.fn(() => dialog), isVisible: vi.fn(async () => false) } : originalLocator(selector)) as unknown as typeof page.locator;
+  const adapter = new FacebookComposerAdapter();
+  vi.spyOn(adapter, 'openGroup').mockResolvedValue(undefined);
+  (adapter as unknown as { dismissComposer: () => Promise<undefined> }).dismissComposer = vi.fn(async () => undefined);
+  return adapter;
+}
+
 describe('FacebookComposerAdapter content handling', () => {
+  it('uses the versioned selector set', () => {
+    expect(FACEBOOK_SELECTORS_VERSION).toBe('2026-08-v2');
+  });
+
+  it('resolves the live Vietnamese trigger variant through the central resolver', async () => {
+    const adapter = new FacebookComposerAdapter();
+    expect(facebookText.composerTrigger.test('Bạn viết gì đi...')).toBe(true);
+    const result = await adapter.findComposerTrigger(resolverPage([{ role: 'button', tag: 'DIV', text: 'Bạn viết gì đi...' }]));
+    expect(result).toMatchObject({ status: 'FOUND', count: 1, strategy: 'VISIBLE_TEXT_INTERACTIVE_ANCESTOR' });
+  });
+
+  it('resolves an aria-label-only trigger without broad feed matching', async () => {
+    const adapter = new FacebookComposerAdapter();
+    const result = await adapter.findComposerTrigger(resolverPage([{ role: 'button', tag: 'DIV', ariaLabel: 'Tạo bài viết' }]));
+    expect(result).toMatchObject({ status: 'FOUND', count: 1, strategy: 'ROLE_ACCESSIBLE_NAME' });
+  });
+
+  it('rejects multiple genuine triggers as ambiguous without clicking', async () => {
+    const adapter = new FacebookComposerAdapter();
+    const result = await adapter.findComposerTrigger(resolverPage([{ role: 'button', tag: 'DIV', text: 'Bạn viết gì đi...' }, { role: 'button', tag: 'DIV', text: 'Tạo bài viết' }]));
+    expect(result).toMatchObject({ status: 'AMBIGUOUS', count: 2 });
+  });
+
+  it('does not treat generic post actions as composer triggers', async () => {
+    const adapter = new FacebookComposerAdapter();
+    const result = await adapter.findComposerTrigger(resolverPage([{ role: 'button', tag: 'BUTTON', text: 'Đăng' }, { role: 'button', tag: 'BUTTON', text: 'Chia sẻ' }]));
+    expect(result).toMatchObject({ status: 'MISSING', count: 0 });
+  });
+
+  it('runs preflight through one resolved trigger, composer, textbox, and content path', async () => {
+    const state: FakeState = { text: '', fillCount: 0, insertCount: 0, fillEnables: true, fillUpdates: true, fallbackEnables: true, fallbackUpdates: true, enabled: false };
+    const fake = fakeComposer(state); const adapter = actualAdapterFor(fake);
+    const result = await adapter.preflight(fake.page, queueItem('Resolver integration'), true);
+    expect(result.probe.status).toBe('FOUND');
+    expect(result.probe.triggerStrategy).toBe('ROLE_ACCESSIBLE_NAME');
+    expect(result.probe.contentObserved).toBe(true);
+    expect(state.fillCount).toBe(1);
+    expect(fake.post.click).not.toHaveBeenCalled();
+  });
+
+  it('captures early diagnostics when the trigger is missing', async () => {
+    const adapter = new FacebookComposerAdapter(); vi.spyOn(adapter, 'openGroup').mockResolvedValue(undefined);
+    const capture = vi.fn(async () => 'C:\\managed\\diagnostics\\trigger.png');
+    const result = await adapter.preflight(resolverPage([{ role: 'button', tag: 'BUTTON', text: 'Đăng' }, { role: 'button', tag: 'BUTTON', ariaLabel: 'Chia sẻ' }]), queueItem('Trigger diagnostic'), false, capture);
+    expect(result.probe).toMatchObject({ status: 'MISSING', reason: 'COMPOSER_TRIGGER_NOT_FOUND', diagnosticPath: expect.stringContaining('trigger.png') });
+    expect(result.probe.triggerCandidates).toHaveLength(2);
+    expect(capture).toHaveBeenCalledWith(expect.anything(), 'MISSING');
+  });
+
   it('preserves Unicode, emoji, line breaks, and appends a missing link once', async () => {
     const state: FakeState = { text: '', fillCount: 0, insertCount: 0, fillEnables: true, fillUpdates: true, fallbackEnables: true, fallbackUpdates: true, enabled: false };
     const fake = fakeComposer(state); const adapter = adapterFor(fake);

@@ -16,6 +16,8 @@ export function selectorDiagnosticSummary(probe: SelectorProbeResult, appVersion
   if (probe.expectedContentLength !== undefined) lines.push('expectedContentLength=' + probe.expectedContentLength);
   if (probe.entryMethod) lines.push('entryMethod=' + probe.entryMethod);
   if (probe.reason) lines.push('reason=' + probe.reason);
+  if (probe.triggerStrategy) lines.push('triggerStrategy=' + probe.triggerStrategy);
+  if (probe.triggerCandidates?.length) lines.push('triggerCandidates=' + probe.triggerCandidates.map((candidate) => [candidate.role, candidate.ariaLabel, candidate.title, candidate.text].filter(Boolean).join(' ')).join(' | '));
   if (probe.diagnosticPath) lines.push('diagnosticPath=' + probe.diagnosticPath);
   if (probe.warnings.length) lines.push('warnings=' + probe.warnings.join(' | '));
   return lines.join('\n');

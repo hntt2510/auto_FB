@@ -92,6 +92,13 @@ export type ApiErrorCode =
   | 'NETWORK_ERROR'
   | 'BROWSER_CLOSED'
   | 'EXECUTION_CANCELLED'
+  | 'CANARY_LIMIT'
+  | 'LIVE_READINESS_FAILED'
+  | 'PREFLIGHT_REQUIRED'
+  | 'PREFLIGHT_EXPIRED'
+  | 'SCHEDULER_DISARMED'
+  | 'OVERDUE_BACKLOG_ACK_REQUIRED'
+  | 'PUBLISHING_STOPPED'
   | 'UNKNOWN_ERROR';
 
 export type ApiError = { code: ApiErrorCode; message: string };
@@ -184,7 +191,7 @@ export type ExecutionMode = 'DRY_RUN' | 'LIVE';
 export type SelectorProbeStatus = 'FOUND' | 'MISSING' | 'AMBIGUOUS' | 'NOT_TESTED';
 export type SelectorProbeField = { status: SelectorProbeStatus; count?: number; reason?: string };
 export type SelectorProbeResult = { id?: string; accountId: string; groupId: string; selectorVersion: string; status: SelectorProbeStatus; session: SelectorProbeField; group: SelectorProbeField; composerTrigger: SelectorProbeField; composerTextbox: SelectorProbeField; mediaInput: SelectorProbeField; postButton: SelectorProbeField; uploadBusy: SelectorProbeField; approvalSignal: SelectorProbeField; acceptanceSignal: SelectorProbeField; checkedAt: string; warnings: string[] };
-export type PreflightResult = SelectorProbeResult & { queueItemId: string; accountReady: boolean; groupOpened: boolean; composerFound: boolean; textboxFound: boolean; mediaInputFound?: boolean; postButtonFound: boolean; passed: boolean; filledContent: boolean };
+export type PreflightResult = SelectorProbeResult & { queueItemId: string; snapshotHash?: string; accountReady: boolean; groupOpened: boolean; composerFound: boolean; textboxFound: boolean; mediaInputFound?: boolean; mediaRequired?: boolean; mediaValidated?: boolean; postButtonFound: boolean; passed: boolean; filledContent: boolean };
 export type ReconciliationAction = 'MARK_SUBMITTED' | 'MARK_VERIFIED';
 export type ReconciliationRecord = { id: string; queueItemId: string; attemptId?: string; action: ReconciliationAction; evidence: string; createdAt: string };
 export type PublishAttemptEvent = { id: string; attemptId: string; sequence: number; eventType: string; message?: string; createdAt: string };
@@ -273,11 +280,13 @@ export type QueueApi = {
 
 export type DashboardApi = { summary: () => Promise<DashboardSummary> };
 
-export type PublishingSettings = { enabled: boolean; executionMode: ExecutionMode; schedulerIntervalSeconds: number; maxConcurrentAccounts: number; videoUploadTimeoutSeconds: number };
+export type PublishingSettings = { enabled: boolean; executionMode: ExecutionMode; schedulerIntervalSeconds: number; maxConcurrentAccounts: number; videoUploadTimeoutSeconds: number; canaryMode?: boolean };
 export type PublishingBlock = { accountId: string; accountName: string; reason: 'LOGIN_REQUIRED' | 'CHECKPOINT'; message: string; blockedAt: string };
 export type PublishingRunResult = { requested: number; claimed: number; completed: number; skipped: number };
 export type PublishingReadiness = 'NOT_READY' | 'PREFLIGHT_READY' | 'LIVE_ENABLED' | 'DEGRADED';
-export type PublishingEngineStatus = { settings: PublishingSettings; schedulerRunning: boolean; tickRunning: boolean; running: QueueItem[]; blockedAccounts: PublishingBlock[]; recentAttempts: PublishAttemptSummary[]; dueCount: number; selectorVersion: string; readiness: PublishingReadiness; recentProbes: SelectorProbeResult[] };
+export type LiveReadinessReason = 'ENGINE_DISABLED' | 'NOT_LIVE_MODE' | 'ACCOUNT_BLOCKED' | 'ACCOUNT_LOGIN_REQUIRED' | 'ACCOUNT_CHECKPOINT' | 'GROUP_INACTIVE' | 'ASSIGNMENT_MISSING' | 'PREFLIGHT_MISSING' | 'PREFLIGHT_EXPIRED' | 'PREFLIGHT_SELECTOR_VERSION_MISMATCH' | 'PREFLIGHT_SNAPSHOT_MISMATCH' | 'MEDIA_INVALID';
+export type LiveReadiness = { ready: true; preflightId: string } | { ready: false; reasons: LiveReadinessReason[] };
+export type PublishingEngineStatus = { settings: PublishingSettings; schedulerRunning: boolean; schedulerArmed: boolean; tickRunning: boolean; running: QueueItem[]; blockedAccounts: PublishingBlock[]; recentAttempts: PublishAttemptSummary[]; dueCount: number; overdueCount: number; selectorVersion: string; readiness: PublishingReadiness; recentProbes: SelectorProbeResult[] };
 export type RequeueInput = { queueId: string; scheduledAt?: string };
 
 export type PublishApi = {
@@ -296,6 +305,11 @@ export type PublishApi = {
   reconciliations: (queueId: string) => Promise<ReconciliationRecord[]>;
   openDiagnostic: (attemptId: string) => Promise<void>;
   deleteDiagnostic: (attemptId: string) => Promise<void>;
+  evaluateLiveReadiness: (queueId: string) => Promise<LiveReadiness>;
+  armScheduler: (acknowledgeOverdue?: boolean) => Promise<PublishingEngineStatus>;
+  disarmScheduler: () => Promise<PublishingEngineStatus>;
+  stopPublishing: () => Promise<PublishingEngineStatus>;
+  exportReport: () => Promise<string | undefined>;
   onChanged: (listener: () => void) => () => void;
 };
 

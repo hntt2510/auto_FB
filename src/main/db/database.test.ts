@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { createAppPaths, openDatabase } from './database';
+import { backupDatabaseSync, createAppPaths, openDatabase } from './database';
 import { AccountRepository } from './repositories/AccountRepository';
 import { GroupRepository } from './repositories/GroupRepository';
 import { DraftRepository } from './repositories/DraftRepository';
@@ -17,6 +17,14 @@ function withDatabase(run: (db: ReturnType<typeof openDatabase>) => void): void 
 }
 
 describe('workspace persistence', () => {
+  it('creates a SQLite-safe retained backup', () => withDatabase((db) => {
+    const backupRoot = join(tmpdir(), 'fb-backups-' + randomUUID());
+    const path = backupDatabaseSync(db, backupRoot, new Date('2026-01-01T01:02:03.000Z'));
+    expect(path).toContain('app-20260101-010203Z.db');
+    expect(db.prepare('PRAGMA integrity_check').get()).toEqual({ integrity_check: 'ok' });
+    rmSync(backupRoot, { recursive: true, force: true });
+  }));
+
   it('creates workspace tables with foreign keys and survives reopen', () => withDatabase((db) => {
     expect(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all()).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }]);
     expect(db.pragma('foreign_keys')).toEqual([{ foreign_keys: 1 }]);

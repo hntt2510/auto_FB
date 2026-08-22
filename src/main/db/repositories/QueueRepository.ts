@@ -75,6 +75,8 @@ export class QueueRepository {
     return this.attachMedia(rows);
   }
 
+  dueCount(now: string): number { return (this.db.prepare("SELECT COUNT(*) AS count FROM queue_items WHERE status = 'PENDING' AND scheduled_at IS NOT NULL AND scheduled_at <= ?").get(now) as { count: number }).count; }
+
   claim(id: string, token: string, timestamp: string): boolean {
     return this.db.prepare("UPDATE queue_items SET status = 'RUNNING', execution_token = ?, lease_started_at = ?, attention_reason = NULL, updated_at = ? WHERE id = ? AND status = 'PENDING' AND execution_token IS NULL")
       .run(token, timestamp, timestamp, id).changes === 1;

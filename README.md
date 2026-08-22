@@ -98,3 +98,33 @@ Selector probes record the account, group, selector version, field-level `FOUND`
 ## Scope
 
 This release intentionally stops at safe account/profile lifecycle, manual content operations, and the opt-in visible-browser publishing engine described above. Comments, scraping, credential entry, CAPTCHA handling, stealth behavior, proxy rotation, and security bypasses remain out of scope.
+
+## Release-candidate guardrails
+
+The release candidate defaults to Canary Mode ON, DRY_RUN, and a disarmed
+scheduler. Canary execution permits one explicitly selected queue item at a
+time and requires a successful queue-specific preflight from the same account,
+group, selector version, and snapshot within 30 minutes. The preflight opens
+the visible composer and validates managed media but never clicks Post.
+
+Switching to LIVE is an explicit operator action. The backend rechecks the
+live-readiness gate immediately before claiming a canary item; renderer
+disabled buttons are not a security boundary. Scheduler arming is session-only
+and overdue work requires explicit acknowledgement. Publishing Engine is reset
+to OFF on application startup so a restart cannot consume an overdue backlog.
+
+Publication verification is candidate-scoped. Existing post links and
+tracking-parameter variants are ignored, unrelated same-group posts remain
+SUBMITTED, and SUCCEEDED requires a newly observed target-group candidate whose
+own visible text correlates with the immutable queue snapshot. Attempt timelines
+contain non-sensitive milestones and correlation counts only.
+
+Diagnostics and reports expose selector field status, selector version,
+preflight state, and sanitized queue/attempt summaries. Reports never contain
+draft bodies, media, cookies, tokens, proxy credentials, or Facebook
+credentials. SQLite backups use SQLite-safe backup/VACUUM behavior, retain the
+last five snapshots, and live under the ignored backups/ directory.
+
+Live Facebook validation was not performed for this release candidate. The
+next step is a controlled one-account, one-group, one-post canary with manual
+authentication and operator review.

@@ -8,6 +8,10 @@ profiles/
 media/
 runtime/
 diagnostics/
+backups/
+exports/
+**/backups/
+**/exports/
 fb-account-manager/
 **/profiles/
 **/media/

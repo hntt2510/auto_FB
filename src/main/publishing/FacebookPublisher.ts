@@ -7,16 +7,16 @@ import { FacebookComposerAdapter, type SubmissionEvidence } from './FacebookComp
 import type { PreflightResult } from '@shared/types';
 import { PublishingError } from './PublishingError';
 
-export type PublishMilestone = 'ACCOUNT_READY' | 'GROUP_OPENED' | 'COMPOSER_OPENED' | 'CONTENT_FILLED' | 'MEDIA_UPLOADED' | 'SUBMITTING' | 'POST_CLICKED';
+export type PublishMilestone = 'ACCOUNT_READY' | 'GROUP_OPENED' | 'COMPOSER_OPENED' | 'CONTENT_FILLED' | 'MEDIA_VALIDATED' | 'MEDIA_UPLOADED' | 'SUBMITTING' | 'POST_CLICKED' | 'POST_CORRELATION';
 
 export class FacebookPublisher {
   constructor(private readonly adapter: FacebookComposerAdapter, private readonly media: MediaStorageService) {}
 
   get selectorsVersion(): string { return this.adapter.selectorsVersion; }
 
-  async publish(page: Page, item: QueueRecord, settings: PublishingSettings, milestone: (event: PublishMilestone) => void, signal?: AbortSignal): Promise<SubmissionEvidence> {
+  async publish(page: Page, item: QueueRecord, settings: PublishingSettings, milestone: (event: PublishMilestone, detail?: string) => void, signal?: AbortSignal): Promise<SubmissionEvidence> {
     this.assertNotCancelled(signal); milestone('ACCOUNT_READY');
-    const paths = await this.validateMedia(item);
+    const paths = await this.validateMedia(item); if (paths.length) milestone('MEDIA_VALIDATED');
     try { await this.adapter.openGroup(page, item.groupUrl); }
     catch (error) {
       if (!(error instanceof PublishingError) || error.code !== 'NETWORK_ERROR') throw error;
@@ -27,13 +27,15 @@ export class FacebookPublisher {
     await this.adapter.fillContent(composer, item.body, item.linkUrl); milestone('CONTENT_FILLED'); this.assertNotCancelled(signal);
     if (paths.length) { await this.adapter.uploadMedia(page, paths, item.media.some((asset) => asset.type === 'VIDEO'), settings.videoUploadTimeoutSeconds, composer.container); milestone('MEDIA_UPLOADED'); }
     this.assertNotCancelled(signal);
-    const result = await this.adapter.submit(page, composer, baseline, item.groupUrl, () => milestone('SUBMITTING')); milestone('POST_CLICKED'); return result;
+    const result = await this.adapter.submit(page, composer, baseline, item.groupUrl, () => milestone('SUBMITTING'), (detail) => milestone('POST_CORRELATION', detail)); milestone('POST_CLICKED'); return result;
   }
 
-  async preflight(page: Page, item: QueueRecord, fillContent = false): Promise<PreflightResult> {
+  async preflight(page: Page, item: QueueRecord, fillContent = false, settings?: PublishingSettings): Promise<PreflightResult> {
+    if (settings && item.media.some((asset) => asset.type === 'VIDEO') && (!Number.isInteger(settings.videoUploadTimeoutSeconds) || settings.videoUploadTimeoutSeconds < 60)) throw new PublishingError('MEDIA_UPLOAD_TIMEOUT', 'Video readiness timeout is invalid.');
     await this.validateMedia(item);
     const result = await this.adapter.preflight(page, item, fillContent);
-    return { ...result.probe, queueItemId: item.id, accountReady: result.probe.session.status === 'FOUND', groupOpened: result.probe.group.status === 'FOUND', composerFound: result.probe.composerTrigger.status === 'FOUND', textboxFound: result.probe.composerTextbox.status === 'FOUND', mediaInputFound: result.probe.mediaInput.status === 'FOUND', postButtonFound: result.probe.postButton.status === 'FOUND', passed: result.probe.status === 'FOUND', filledContent: result.filledContent };
+    const mediaRequired = item.media.length > 0; const mediaInputFound = result.probe.mediaInput.status === 'FOUND';
+    return { ...result.probe, queueItemId: item.id, snapshotHash: item.snapshotHash, accountReady: result.probe.session.status === 'FOUND', groupOpened: result.probe.group.status === 'FOUND', composerFound: result.probe.composerTrigger.status === 'FOUND', textboxFound: result.probe.composerTextbox.status === 'FOUND', mediaInputFound, mediaRequired, mediaValidated: true, postButtonFound: result.probe.postButton.status === 'FOUND', passed: result.probe.status === 'FOUND' && (!mediaRequired || mediaInputFound), filledContent: result.filledContent };
   }
 
   private async validateMedia(item: QueueRecord): Promise<string[]> {

@@ -93,6 +93,14 @@ export class PublishRepository {
     this.db.prepare('INSERT INTO publish_preflights (id, queue_item_id, account_id, group_id, execution_mode, selector_version, status, details_json, checked_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(randomUUID(), result.queueItemId, result.accountId, result.groupId, 'DRY_RUN', result.selectorVersion, result.passed ? 'PASSED' : result.status === 'AMBIGUOUS' ? 'AMBIGUOUS' : 'FAILED', JSON.stringify(result), now, now);
   }
 
+  latestPreflight(queueItemId: string): { id: string; checkedAt: string; selectorVersion: string; snapshotHash?: string; status: 'PASSED' | 'FAILED' | 'AMBIGUOUS' } | undefined {
+    const row = this.db.prepare('SELECT id, selector_version, status, details_json, checked_at FROM publish_preflights WHERE queue_item_id = ? ORDER BY checked_at DESC LIMIT 1').get(queueItemId) as { id: string; selector_version: string; status: 'PASSED' | 'FAILED' | 'AMBIGUOUS'; details_json: string; checked_at: string } | undefined;
+    if (!row) return undefined;
+    let parsed: { snapshotHash?: string } = {};
+    try { parsed = JSON.parse(row.details_json) as { snapshotHash?: string }; } catch { /* treat malformed diagnostics as stale */ }
+    return { id: row.id, checkedAt: row.checked_at, selectorVersion: row.selector_version, snapshotHash: parsed.snapshotHash, status: row.status };
+  }
+
   diagnostic(attemptId: string): string | undefined { return this.diagnosticPath(attemptId); }
   clearDiagnostic(attemptId: string): void { this.db.prepare('UPDATE publish_attempts SET diagnostic_path = NULL, diagnostic_created_at = NULL WHERE id = ?').run(attemptId); }
 

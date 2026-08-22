@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AccountApi, AssignmentAccount, AuditLog, CreateAccountInput, DashboardApi, DashboardSummary, DeleteAccountInput, Draft, DraftApi, DraftFilter, DraftInput, DraftMedia, DraftStatus, FacebookAccount, FacebookGroup, GroupApi, GroupFilter, GroupImportPreview, GroupImportResult, GroupInput, GroupOpenResult, HealthCheckResult, LogApi, LogFilter, MediaReorderInput, PreflightResult, PublishApi, PublishAttempt, PublishingEngineStatus, PublishingRunResult, PublishingSettings, PublishingSettingsApi, PublishingSettingsUpdate, QueueApi, QueueBatchInput, QueueFilter, QueueItem, QueueOptions, QueuePreview, ReconciliationRecord, RequeueInput, SelectorProbeResult, UpdateAccountInput } from '@shared/types';
+import type { AccountApi, AssignmentAccount, AuditLog, CreateAccountInput, DashboardApi, DashboardSummary, DeleteAccountInput, Draft, DraftApi, DraftFilter, DraftInput, DraftMedia, DraftStatus, FacebookAccount, FacebookGroup, GroupApi, GroupFilter, GroupImportPreview, GroupImportResult, GroupInput, GroupOpenResult, HealthCheckResult, LiveReadiness, LogApi, LogFilter, MediaReorderInput, PreflightResult, PublishApi, PublishAttempt, PublishingEngineStatus, PublishingRunResult, PublishingSettings, PublishingSettingsApi, PublishingSettingsUpdate, QueueApi, QueueBatchInput, QueueFilter, QueueItem, QueueOptions, QueuePreview, ReconciliationRecord, RequeueInput, SelectorProbeResult, UpdateAccountInput } from '@shared/types';
 
 type IpcResponse<T> = { ok: true; data: T } | { ok: false; error: { code: string; message: string } };
 
@@ -92,6 +92,11 @@ const publishApi: PublishApi = {
   reconciliations: (queueId: string) => invoke<ReconciliationRecord[]>('publishing:reconciliations', queueId),
   openDiagnostic: (attemptId: string) => invoke<void>('publishing:open-diagnostic', attemptId),
   deleteDiagnostic: (attemptId: string) => invoke<void>('publishing:delete-diagnostic', attemptId),
+  evaluateLiveReadiness: (queueId: string) => invoke<LiveReadiness>('publishing:live-readiness', queueId),
+  armScheduler: (acknowledgeOverdue = false) => invoke<PublishingEngineStatus>('publishing:arm-scheduler', { acknowledgeOverdue }),
+  disarmScheduler: () => invoke<PublishingEngineStatus>('publishing:disarm-scheduler'),
+  stopPublishing: () => invoke<PublishingEngineStatus>('publishing:stop'),
+  exportReport: () => invoke<string | undefined>('publishing:export-report'),
   onChanged: (listener: () => void) => { const callback = () => listener(); ipcRenderer.on('publishing:changed', callback); return () => ipcRenderer.removeListener('publishing:changed', callback); }
 };
 

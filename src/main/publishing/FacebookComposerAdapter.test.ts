@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Locator } from 'playwright';
-import { FacebookComposerAdapter, correlateNewPostUrl } from './FacebookComposerAdapter';
+import { FacebookComposerAdapter, candidateContentMatches, correlateNewPostUrl, normalizePostCandidateUrl } from './FacebookComposerAdapter';
 
 describe('FacebookComposerAdapter content handling', () => {
   it('preserves Unicode and appends a missing link once', async () => {
@@ -24,5 +24,16 @@ describe('FacebookComposerAdapter content handling', () => {
     const oldUrl = 'https://www.facebook.com/groups/demo/posts/10'; const newUrl = 'https://www.facebook.com/groups/demo/posts/11';
     expect(correlateNewPostUrl([oldUrl, newUrl], [oldUrl], 'https://www.facebook.com/groups/demo')).toBe(newUrl);
     expect(correlateNewPostUrl(['https://www.facebook.com/groups/other/posts/11'], [oldUrl], 'https://www.facebook.com/groups/demo')).toBeUndefined();
+  });
+
+  it('canonicalizes tracking variants of the same post', () => {
+    expect(normalizePostCandidateUrl('https://www.facebook.com/groups/demo/posts/10?__cft__=tracking#fragment')).toBe('https://www.facebook.com/groups/demo/posts/10');
+    expect(correlateNewPostUrl(['https://www.facebook.com/groups/demo/posts/10?__cft__=new'], ['https://www.facebook.com/groups/demo/posts/10'], 'https://www.facebook.com/groups/demo')).toBeUndefined();
+  });
+
+  it('requires candidate-scoped content correlation', () => {
+    expect(candidateContentMatches('Completely unrelated content', 'A post about a very specific launch announcement')).toBe(false);
+    expect(candidateContentMatches('A post about a very specific launch announcement with more text', 'A post about a very specific launch announcement')).toBe(true);
+    expect(candidateContentMatches('', 'A post')).toBe(false);
   });
 });

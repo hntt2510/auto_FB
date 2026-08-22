@@ -4,6 +4,15 @@ import { lstatSync, mkdirSync, realpathSync } from 'node:fs';
 import { basename, join, relative, resolve } from 'node:path';
 import type { Page } from 'playwright';
 import { AppError } from '@main/errors';
+import type { SelectorProbeResult } from '@shared/types';
+
+export function selectorDiagnosticSummary(probe: SelectorProbeResult, appVersion: string): string {
+  const fields = ['session', 'group', 'composerTrigger', 'composerTextbox', 'mediaInput', 'postButton', 'uploadBusy', 'approvalSignal', 'acceptanceSignal'] as const;
+  const lines = ['appVersion=' + appVersion, 'selectorVersion=' + probe.selectorVersion, 'status=' + probe.status, 'timestamp=' + probe.checkedAt];
+  for (const field of fields) lines.push(field + '=' + probe[field].status + (probe[field].count === undefined ? '' : ' count=' + probe[field].count));
+  if (probe.warnings.length) lines.push('warnings=' + probe.warnings.join(' | '));
+  return lines.join('\n');
+}
 
 export class PublishDiagnostics {
   constructor(public readonly root: string, private readonly retention = 50) { this.assertRoot(); }

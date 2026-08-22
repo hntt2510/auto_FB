@@ -1,6 +1,6 @@
 import type { PublishingService } from '@main/publishing/PublishingService';
 import { BrowserWindow } from 'electron';
-import { groupOpenSchema, publishMarkVerifiedSchema, publishRequeueSchema, publishRetrySchema, publishRunSelectedSchema, queueIdSchema } from '@shared/schemas';
+import { groupOpenSchema, publishMarkVerifiedSchema, publishRequeueSchema, publishRetrySchema, publishRunSelectedSchema, queueIdSchema, schedulerArmSchema } from '@shared/schemas';
 import { parseOrThrow, registerAuthorizedHandler } from './authorized';
 
 export function registerPublishingIpc(service: PublishingService, allowedSenderIds: () => ReadonlySet<number>): () => void {
@@ -19,7 +19,12 @@ export function registerPublishingIpc(service: PublishingService, allowedSenderI
     registerAuthorizedHandler('publishing:preflight', allowedSenderIds, (_event, id: unknown) => service.preflight(parseOrThrow(queueIdSchema.safeParse(id)))),
     registerAuthorizedHandler('publishing:probe', allowedSenderIds, (_event, input: unknown) => { const value = parseOrThrow(groupOpenSchema.safeParse(input)); return service.probe(value.accountId, value.groupId); }),
     registerAuthorizedHandler('publishing:delete-diagnostic', allowedSenderIds, (_event, id: unknown) => service.deleteDiagnostic(parseOrThrow(queueIdSchema.safeParse(id)))),
-    registerAuthorizedHandler('publishing:open-diagnostic', allowedSenderIds, (_event, id: unknown) => service.openDiagnostic(parseOrThrow(queueIdSchema.safeParse(id))))
+    registerAuthorizedHandler('publishing:open-diagnostic', allowedSenderIds, (_event, id: unknown) => service.openDiagnostic(parseOrThrow(queueIdSchema.safeParse(id)))),
+    registerAuthorizedHandler('publishing:live-readiness', allowedSenderIds, (_event, id: unknown) => service.evaluateLiveReadiness(parseOrThrow(queueIdSchema.safeParse(id)))),
+    registerAuthorizedHandler('publishing:arm-scheduler', allowedSenderIds, (_event, input: unknown) => service.armScheduler(parseOrThrow(schedulerArmSchema.safeParse(input)).acknowledgeOverdue)),
+    registerAuthorizedHandler('publishing:disarm-scheduler', allowedSenderIds, () => service.disarmScheduler()),
+    registerAuthorizedHandler('publishing:stop', allowedSenderIds, () => service.stopPublishing()),
+    registerAuthorizedHandler('publishing:export-report', allowedSenderIds, () => service.exportReport())
   ];
   return () => cleanups.forEach((cleanup) => cleanup());
 }

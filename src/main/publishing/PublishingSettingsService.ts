@@ -5,7 +5,7 @@ import { publishingSettingsSchema, publishingSettingsUpdateSchema } from '@share
 import type { PublishingSettings, PublishingSettingsUpdate } from '@shared/types';
 
 const KEY = 'publishing:settings';
-export const DEFAULT_PUBLISHING_SETTINGS: PublishingSettings = { enabled: false, executionMode: 'DRY_RUN', schedulerIntervalSeconds: 30, maxConcurrentAccounts: 2, videoUploadTimeoutSeconds: 600 };
+export const DEFAULT_PUBLISHING_SETTINGS: PublishingSettings = { enabled: false, executionMode: 'DRY_RUN', schedulerIntervalSeconds: 30, maxConcurrentAccounts: 2, videoUploadTimeoutSeconds: 600, canaryMode: true };
 
 export class PublishingSettingsService {
   constructor(private readonly settings: SettingsRepository, private readonly audit: AuditLogRepository, private readonly onChanged: (settings: PublishingSettings) => void) {}
@@ -13,6 +13,15 @@ export class PublishingSettingsService {
   get(): PublishingSettings {
     const value = this.settings.get(KEY); if (!value) return DEFAULT_PUBLISHING_SETTINGS;
     try { const parsed = publishingSettingsSchema.safeParse({ executionMode: 'DRY_RUN', ...JSON.parse(value) }); return parsed.success ? parsed.data : DEFAULT_PUBLISHING_SETTINGS; } catch { return DEFAULT_PUBLISHING_SETTINGS; }
+  }
+
+  /** Reset only the runtime engine switch on startup. Mode and guardrails persist. */
+  resetEngineOnStartup(): PublishingSettings {
+    const current = this.get();
+    if (!current.enabled) return current;
+    const next = { ...current, enabled: false };
+    this.settings.set(KEY, JSON.stringify(next));
+    return next;
   }
 
   update(input: PublishingSettingsUpdate): PublishingSettings {

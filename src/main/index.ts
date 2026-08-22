@@ -30,6 +30,8 @@ import { PublishCoordinator } from './publishing/PublishCoordinator';
 import { PublishScheduler } from './publishing/PublishScheduler';
 import { PublishingSettingsService } from './publishing/PublishingSettingsService';
 import { PublishingService } from './publishing/PublishingService';
+import { LiveReadinessService } from './publishing/LiveReadinessService';
+import { OperationsReportService } from './publishing/OperationsReportService';
 import { broadcastPublishingChanged } from './ipc/publishing.ipc';
 
 let service: AccountService | undefined;
@@ -60,6 +62,7 @@ if (!gotLock) {
     const queue = new QueueRepository(database);
     const media = new MediaStorageService(paths.media);
     const publishRepository = new PublishRepository(database);
+    const liveReadiness = new LiveReadinessService(accounts, groups, publishRepository, media);
     const diagnostics = new PublishDiagnostics(paths.diagnostics);
     service = new AccountService(accounts, audit, profiles, new SecretStore(settings, {
       isEncryptionAvailable: () => safeStorage.isEncryptionAvailable(),
@@ -70,11 +73,13 @@ if (!gotLock) {
     cleanupIpc = registerIpc(service, () => new Set(BrowserWindow.getAllWindows().map((current) => current.webContents.id)));
     registerMediaProtocol(drafts, media);
     const workspaceNotify = () => { broadcastPublishingChanged(); };
-    const executor = new PublishExecutor(queue, publishRepository, accounts, groups, profiles, service.browser, new FacebookPublisher(new FacebookComposerAdapter(), media), diagnostics, audit, workspaceNotify);
+    const executor = new PublishExecutor(queue, publishRepository, accounts, groups, profiles, service.browser, new FacebookPublisher(new FacebookComposerAdapter(), media), diagnostics, audit, workspaceNotify, liveReadiness);
     coordinator = new PublishCoordinator(queue, executor);
     const publishingSettings = new PublishingSettingsService(settings, audit, () => { scheduler?.reconfigure(); workspaceNotify(); });
-    scheduler = new PublishScheduler(queue, coordinator, publishingSettings, workspaceNotify);
-    publishing = new PublishingService(queue, publishRepository, accounts, groups, media, executor, coordinator, scheduler, publishingSettings, diagnostics, audit, workspaceNotify);
+    scheduler = new PublishScheduler(queue, coordinator, publishingSettings, workspaceNotify, false);
+    const operationsReport = new OperationsReportService(accounts, queue, publishRepository, publishingSettings, executor.selectorVersion, app.getVersion());
+    publishing = new PublishingService(queue, publishRepository, accounts, groups, media, executor, coordinator, scheduler, publishingSettings, diagnostics, audit, workspaceNotify, liveReadiness, operationsReport);
+    publishingSettings.resetEngineOnStartup();
     publishing.recover(); service.setHealthObserver((result) => publishing?.handleHealthResult(result)); scheduler.start();
     cleanupIpc = chainCleanup(cleanupIpc, registerWorkspaceIpc({
       groups: new GroupService(groups, accounts, queue, service.browser, audit, workspaceNotify),

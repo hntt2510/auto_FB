@@ -18,8 +18,13 @@ export function selectorDiagnosticSummary(probe: SelectorProbeResult, appVersion
   if (probe.reason) lines.push('reason=' + probe.reason);
   if (probe.triggerStrategy) lines.push('triggerStrategy=' + probe.triggerStrategy);
   if (probe.triggerCandidates?.length) lines.push('triggerCandidates=' + probe.triggerCandidates.map((candidate) => [candidate.role, candidate.ariaLabel, candidate.title, candidate.text].filter(Boolean).join(' ')).join(' | '));
+  if (probe.createPostDialog) lines.push('createPostDialog=' + probe.createPostDialog.status + (probe.createPostDialog.count === undefined ? '' : ' count=' + probe.createPostDialog.count));
+  if (probe.dialogTitle) lines.push('dialogTitle=' + probe.dialogTitle);
+  if (probe.dialogCandidates?.length) lines.push('dialogCandidates=' + probe.dialogCandidates.map((candidate) => [candidate.title, candidate.newAfterTrigger === undefined ? '' : candidate.newAfterTrigger ? 'newAfterTrigger=YES' : 'newAfterTrigger=NO', candidate.changedAfterTrigger ? 'changedAfterTrigger=YES' : '', candidate.visible === undefined ? '' : candidate.visible ? 'visible=YES' : 'visible=NO', candidate.foreground === undefined ? '' : candidate.foreground ? 'foreground=YES' : 'foreground=NO'].filter(Boolean).join(' ')).join(' | '));
+  if (probe.rawEditorCount !== undefined) lines.push('rawEditorCount=' + probe.rawEditorCount);
+  if (probe.logicalEditorCount !== undefined) lines.push('logicalEditorCount=' + probe.logicalEditorCount);
   if (probe.textboxStrategy) lines.push('textboxStrategy=' + probe.textboxStrategy);
-  if (probe.textboxCandidates?.length) lines.push('textboxCandidates=' + probe.textboxCandidates.map((candidate) => [candidate.tag, candidate.role, candidate.contenteditable, candidate.ariaLabel, candidate.placeholder, candidate.ariaMultiline, candidate.lexicalEditor, candidate.visible === undefined ? '' : candidate.visible ? 'visible=YES' : 'visible=NO'].filter(Boolean).join(' ')).join(' | '));
+  if (probe.textboxCandidates?.length) lines.push('textboxCandidates=' + probe.textboxCandidates.map((candidate) => [candidate.tag, candidate.role, candidate.contenteditable, candidate.ariaLabel, candidate.placeholder, candidate.ariaMultiline, candidate.lexicalEditor, candidate.groupId === undefined ? '' : 'group=' + candidate.groupId, candidate.focusable === undefined ? '' : candidate.focusable ? 'focusable=YES' : 'focusable=NO', candidate.boundingBox ? `box=${candidate.boundingBox.x},${candidate.boundingBox.y},${candidate.boundingBox.width},${candidate.boundingBox.height}` : '', candidate.visible === undefined ? '' : candidate.visible ? 'visible=YES' : 'visible=NO'].filter(Boolean).join(' ')).join(' | '));
   if (probe.diagnosticPath) lines.push('diagnosticPath=' + probe.diagnosticPath);
   if (probe.warnings.length) lines.push('warnings=' + probe.warnings.join(' | '));
   return lines.join('\n');

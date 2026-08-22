@@ -1,24 +1,31 @@
-import type { Locator, Page } from 'playwright';
+import type { ElementHandle, Locator, Page } from 'playwright';
 import { SessionHealthService } from '@main/browser/SessionHealthService';
 import { normalizeFacebookGroupUrl } from '@shared/groupUrl';
 import type { QueueRecord } from '@main/db/repositories/QueueRepository';
-import type { ComposerEditorType, ComposerEntryMethod, SelectorProbeField, SelectorProbeResult, TextboxCandidateSummary, TriggerCandidateSummary } from '@shared/types';
+import type { ComposerEditorType, ComposerEntryMethod, DialogCandidateSummary, SelectorProbeField, SelectorProbeResult, TextboxCandidateSummary, TriggerCandidateSummary } from '@shared/types';
 import { PublishingError } from './PublishingError';
 import { FACEBOOK_SELECTORS_VERSION, facebookText } from './selectors/facebookSelectors';
 
 export type PostCandidate = { url: string; canonicalUrl: string; container?: Locator; visibleText?: string; groupIdentifier?: string };
 export type SubmissionEvidence = { result: 'SUBMITTED' | 'SUBMITTED_PENDING_APPROVAL' | 'VERIFIED_PUBLISHED' | 'UNKNOWN'; evidence: string; postUrl?: string };
-export type ComposerHandle = { container: Locator; textbox: Locator; textboxStrategy?: string; textboxCandidates?: TextboxCandidateSummary[] };
+export type ComposerHandle = { container: Locator; textbox: Locator; textboxStrategy?: string; textboxCandidates?: TextboxCandidateSummary[]; dialogTitle?: string; dialogCandidates?: DialogCandidateSummary[]; rawEditorCount?: number; logicalEditorCount?: number };
 export type SubmissionBaseline = { urls: string[]; bodyFingerprint: string; candidates?: PostCandidate[] };
 export type ComposerContentEntry = { method: ComposerEntryMethod; editorType: ComposerEditorType; visibleContentPresent: boolean; contentLength: number; expectedLength: number };
 export type PreflightDiagnosticCapture = (page: Page, status: SelectorProbeResult['status']) => Promise<string | undefined>;
 export type ComposerTriggerResolution = { status: 'FOUND' | 'MISSING' | 'AMBIGUOUS'; locator?: Locator; strategy?: string; count: number; safeCandidates: TriggerCandidateSummary[] };
-export type ComposerTextboxResolution = { status: 'FOUND' | 'MISSING' | 'AMBIGUOUS'; locator?: Locator; strategy?: string; count: number; safeCandidates: TextboxCandidateSummary[] };
-type ComposerReadyResult = { status: 'FOUND' | 'MISSING' | 'AMBIGUOUS'; reason: 'COMPOSER_CONTAINER_NOT_FOUND' | 'COMPOSER_CONTAINER_AMBIGUOUS' | 'COMPOSER_TEXTBOX_NOT_FOUND' | 'COMPOSER_TEXTBOX_AMBIGUOUS'; message: string; container?: Locator; textbox?: Locator; strategy?: string; safeCandidates: TextboxCandidateSummary[] };
+export type ComposerTextboxResolution = { status: 'FOUND' | 'MISSING' | 'AMBIGUOUS'; locator?: Locator; strategy?: string; count: number; rawCount?: number; logicalCount?: number; safeCandidates: TextboxCandidateSummary[] };
+export type ComposerDialogBaseline = { handles: Array<{ handle: ElementHandle<HTMLElement>; title?: string }>; capturedAt: string };
+export type CreatePostDialogCandidate = { locator: Locator; summary: DialogCandidateSummary; title?: string; handle?: ElementHandle<HTMLElement> };
+export type CreatePostDialogResolution = { status: 'FOUND' | 'MISSING' | 'AMBIGUOUS'; locator?: Locator; title?: string; count: number; candidates: CreatePostDialogCandidate[]; safeCandidates: DialogCandidateSummary[] };
+type ComposerReadyResult = { status: 'FOUND' | 'MISSING' | 'AMBIGUOUS'; reason: 'COMPOSER_CONTAINER_NOT_FOUND' | 'COMPOSER_CONTAINER_AMBIGUOUS' | 'COMPOSER_TEXTBOX_NOT_FOUND' | 'COMPOSER_TEXTBOX_AMBIGUOUS'; message: string; container?: Locator; textbox?: Locator; strategy?: string; dialogTitle?: string; dialogCandidates: DialogCandidateSummary[]; rawEditorCount?: number; logicalEditorCount?: number; safeCandidates: TextboxCandidateSummary[] };
 
 class ComposerReadinessError extends PublishingError {
-  constructor(code: 'COMPOSER_CONTAINER_NOT_FOUND' | 'COMPOSER_CONTAINER_AMBIGUOUS' | 'COMPOSER_TEXTBOX_NOT_FOUND' | 'COMPOSER_TEXTBOX_AMBIGUOUS', message: string, public readonly textboxCandidates: TextboxCandidateSummary[]) { super(code, message); }
+  constructor(code: 'COMPOSER_CONTAINER_NOT_FOUND' | 'COMPOSER_CONTAINER_AMBIGUOUS' | 'COMPOSER_TEXTBOX_NOT_FOUND' | 'COMPOSER_TEXTBOX_AMBIGUOUS', message: string, public readonly textboxCandidates: TextboxCandidateSummary[], public readonly dialogCandidates: DialogCandidateSummary[] = [], public readonly dialogTitle?: string, public readonly rawEditorCount?: number, public readonly logicalEditorCount?: number) { super(code, message); }
 }
+
+type TextboxMetadata = { tag: string; role: string; contenteditable: string; ariaLabel: string; placeholder: string; ariaMultiline: string; lexicalEditor: string; type: string; visible: boolean; focusable: boolean; boundingBox?: { x: number; y: number; width: number; height: number } };
+type RawEditorCandidate = { locator: Locator; metadata: TextboxMetadata; handle?: ElementHandle<HTMLElement>; strategy: string; identity: unknown; depth: number };
+type LogicalEditorGroup = { id: number; candidates: RawEditorCandidate[]; selected?: RawEditorCandidate };
 
 const COMPOSER_TRIGGER_PHRASES = [
   'write something', 'create post', 'what s on your mind', 'create a public post',
@@ -171,97 +178,285 @@ export class FacebookComposerAdapter {
     const resolution = triggerResolution ?? await this.findComposerTrigger(page);
     if (resolution.status === 'AMBIGUOUS') throw new PublishingError('COMPOSER_TRIGGER_AMBIGUOUS', 'Multiple Facebook composer triggers were found.');
     if (resolution.status !== 'FOUND' || !resolution.locator) throw new PublishingError('COMPOSER_TRIGGER_NOT_FOUND', 'Facebook group composer trigger was not found.');
-    try { await resolution.locator.click(); } catch { throw new PublishingError('COMPOSER_TRIGGER_CLICK_FAILED', 'Facebook composer trigger could not be clicked.'); }
-    const ready = await this.waitForComposerReady(page);
-    if (ready.status !== 'FOUND' || !ready.container || !ready.textbox) throw new ComposerReadinessError(ready.reason, ready.message, ready.safeCandidates);
-    return { container: ready.container, textbox: ready.textbox, textboxStrategy: ready.strategy, textboxCandidates: ready.safeCandidates };
-  }
-
-  async findComposerTextbox(scope: Locator): Promise<ComposerTextboxResolution> {
-    const namedCandidates = typeof scope.getByRole === 'function' ? await this.visibleCandidates([scope.getByRole('textbox', { name: facebookText.composerTextbox })]) : [];
-    const namedKeys = new Set<string>();
-    for (const candidate of namedCandidates) namedKeys.add(this.textboxMetadataKey(await this.textboxMetadata(candidate)));
-    const broad = scope.locator('[contenteditable="true"], [data-lexical-editor="true"], [role="textbox"], textarea, input');
-    const candidates = await this.boundedLocators(broad, 20);
-    const safeCandidates: TextboxCandidateSummary[] = [];
-    const valid: Array<{ locator: Locator; strategy: string; summary: TextboxCandidateSummary }> = [];
-    for (const candidate of candidates) {
-      const metadata = await this.textboxMetadata(candidate);
-      const summary = this.toTextboxSummary(metadata);
-      safeCandidates.push(summary);
-      const strategy = metadata.visible ? this.textboxStrategy(metadata, namedKeys.has(this.textboxMetadataKey(metadata))) : undefined;
-      if (strategy) valid.push({ locator: candidate, strategy, summary: { ...summary, strategy } });
+    const baseline = await this.captureDialogBaseline(page);
+    try {
+      try { await resolution.locator.click(); } catch { throw new PublishingError('COMPOSER_TRIGGER_CLICK_FAILED', 'Facebook composer trigger could not be clicked.'); }
+      const ready = await this.waitForComposerReady(page, baseline);
+      if (ready.status !== 'FOUND' || !ready.container || !ready.textbox) throw new ComposerReadinessError(ready.reason, ready.message, ready.safeCandidates, ready.dialogCandidates, ready.dialogTitle, ready.rawEditorCount, ready.logicalEditorCount);
+      return { container: ready.container, textbox: ready.textbox, textboxStrategy: ready.strategy, textboxCandidates: ready.safeCandidates, dialogTitle: ready.dialogTitle, dialogCandidates: ready.dialogCandidates, rawEditorCount: ready.rawEditorCount, logicalEditorCount: ready.logicalEditorCount };
+    } finally {
+      await Promise.all(baseline.handles.map(({ handle }) => handle.dispose().catch(() => undefined)));
     }
-    if (valid.length > 1) return { status: 'AMBIGUOUS', count: valid.length, safeCandidates: valid.slice(0, 20).map((candidate) => candidate.summary) };
-    const match = valid[0];
-    if (match) return { status: 'FOUND', locator: match.locator, strategy: match.strategy, count: 1, safeCandidates: [match.summary] };
-    return { status: 'MISSING', count: 0, safeCandidates: safeCandidates.slice(0, 20) };
   }
 
-  private async waitForComposerReady(page: Page, timeoutMs = 7000): Promise<ComposerReadyResult> {
+  async findComposerTextbox(scope: Locator, options: { createPostScope?: boolean } = {}): Promise<ComposerTextboxResolution> {
+    const rawCandidates: RawEditorCandidate[] = [];
+    const utilityCandidates: TextboxCandidateSummary[] = [];
+    const selectors: Array<{ selector: string; strategy: string }> = [
+      { selector: '[data-lexical-editor="true"][contenteditable="true"]', strategy: options.createPostScope ? 'CREATE_POST_LEXICAL' : 'LEXICAL_EDITOR' },
+      { selector: '[role="textbox"]', strategy: options.createPostScope ? 'CREATE_POST_ROLE_TEXTBOX' : 'ROLE_TEXTBOX' },
+      { selector: '[contenteditable="true"]', strategy: options.createPostScope ? 'CREATE_POST_CONTENTEDITABLE' : 'ROLE_TEXTBOX' },
+      { selector: '[aria-multiline="true"][contenteditable="true"]', strategy: options.createPostScope ? 'CREATE_POST_CONTENTEDITABLE' : 'MULTILINE_CONTENTEDITABLE' },
+      { selector: 'textarea', strategy: options.createPostScope ? 'CREATE_POST_TEXTAREA' : 'TEXTAREA' },
+      { selector: 'input', strategy: options.createPostScope ? 'CREATE_POST_INPUT' : 'INPUT_COMPOSER' }
+    ];
+    for (const { selector, strategy } of selectors) {
+      const candidates = await this.boundedLocators(scope.locator(selector), 20);
+      for (const candidate of candidates) {
+        const metadata = await this.textboxMetadata(candidate);
+        if (!metadata.visible) continue;
+        if (this.isUtilityField(metadata)) { utilityCandidates.push(this.toTextboxSummary(metadata)); continue; }
+        const handle = await this.elementHandle(candidate);
+        const validStrategy = this.textboxStrategy(metadata, strategy, options.createPostScope === true);
+        if (!validStrategy) continue;
+        rawCandidates.push({ locator: candidate, metadata, handle, strategy: validStrategy, identity: handle ?? candidate, depth: await this.domDepth(candidate) });
+      }
+    }
+    const groups = await this.groupEditorCandidates(rawCandidates);
+    await Promise.all(rawCandidates.map(async (candidate) => { if (candidate.handle) await candidate.handle.dispose().catch(() => undefined); }));
+    const safeCandidates = [...utilityCandidates, ...groups.flatMap((group) => group.candidates.map((candidate) => ({ ...this.toTextboxSummary(candidate.metadata), strategy: candidate.strategy, groupId: group.id })))];
+    const selectedGroups = groups.map((group) => ({ group, selected: this.selectEditorSurface(group) }));
+    const logicalCount = selectedGroups.length;
+    const rawCount = rawCandidates.length;
+    if (!logicalCount) return { status: 'MISSING', count: 0, rawCount, logicalCount, safeCandidates: safeCandidates.slice(0, 20) };
+    if (logicalCount > 1) {
+      const focusable = selectedGroups.filter(({ selected }) => selected?.metadata.focusable);
+      if (focusable.length === 1) {
+        const match = focusable[0].selected!;
+        return { status: 'FOUND', locator: match.locator, strategy: match.strategy, count: 1, rawCount, logicalCount, safeCandidates: safeCandidates.slice(0, 20).map((candidate) => candidate.groupId === focusable[0].group.id ? { ...candidate, strategy: match.strategy } : candidate) };
+      }
+      return { status: 'AMBIGUOUS', count: logicalCount, rawCount, logicalCount, safeCandidates: safeCandidates.slice(0, 20) };
+    }
+    const selected = selectedGroups[0].selected;
+    if (!selected) return { status: 'MISSING', count: 0, rawCount, logicalCount, safeCandidates: safeCandidates.slice(0, 20) };
+    return { status: 'FOUND', locator: selected.locator, strategy: selected.strategy, count: 1, rawCount, logicalCount, safeCandidates: safeCandidates.slice(0, 20).map((candidate) => ({ ...candidate, strategy: selected.strategy })) };
+  }
+
+  private async waitForComposerReady(page: Page, baseline: ComposerDialogBaseline, timeoutMs = 7000): Promise<ComposerReadyResult> {
     const deadline = Date.now() + Math.min(Math.max(timeoutMs, 1000), 8000);
     let lastCandidates: TextboxCandidateSummary[] = [];
-    let sawContainer = false;
+    let lastDialogs: DialogCandidateSummary[] = [];
+    let rawEditorCount = 0;
+    let logicalEditorCount = 0;
+    let sawDialog = false;
+    let ambiguousEditorCandidates: TextboxCandidateSummary[] = [];
+    let lastTitle: string | undefined;
     while (true) {
-      const containers = await this.visibleComposerContainers(page);
-      sawContainer ||= containers.length > 0;
-      const valid: Array<{ container: Locator; resolution: ComposerTextboxResolution }> = [];
-      for (const container of containers) {
-        const resolution = await this.findComposerTextbox(container);
-        lastCandidates = [...lastCandidates, ...resolution.safeCandidates].slice(-20);
-        if (resolution.status === 'AMBIGUOUS') return { status: 'AMBIGUOUS', reason: 'COMPOSER_TEXTBOX_AMBIGUOUS', message: 'Multiple valid Facebook composer editors are visible.', safeCandidates: resolution.safeCandidates };
-        if (resolution.status === 'FOUND' && resolution.locator) valid.push({ container, resolution });
+      const dialogs = await this.findCreatePostDialog(page, baseline);
+      const ready: Array<{ candidate: CreatePostDialogCandidate; resolution: ComposerTextboxResolution }> = [];
+      sawDialog ||= dialogs.candidates.length > 0;
+      lastDialogs = dialogs.safeCandidates;
+      lastTitle = dialogs.candidates[0]?.title;
+      for (const candidate of dialogs.candidates) {
+        const resolution = await this.findComposerTextbox(candidate.locator, { createPostScope: true });
+        lastCandidates = resolution.safeCandidates.slice(0, 20);
+        rawEditorCount = Math.max(rawEditorCount, resolution.rawCount ?? 0);
+        logicalEditorCount = Math.max(logicalEditorCount, resolution.logicalCount ?? 0);
+        if (resolution.status === 'AMBIGUOUS') ambiguousEditorCandidates = resolution.safeCandidates;
+        if (resolution.status === 'FOUND' && resolution.locator) ready.push({ candidate, resolution });
       }
-      if (valid.length === 1) {
-        const match = valid[0];
-        return { status: 'FOUND', reason: 'COMPOSER_TEXTBOX_NOT_FOUND', message: '', container: match.container, textbox: match.resolution.locator, strategy: match.resolution.strategy, safeCandidates: match.resolution.safeCandidates };
+      if (ready.length === 1) {
+        const match = ready[0];
+        return { status: 'FOUND', reason: 'COMPOSER_TEXTBOX_NOT_FOUND', message: '', container: match.candidate.locator, textbox: match.resolution.locator, strategy: match.resolution.strategy, dialogTitle: match.candidate.title, dialogCandidates: lastDialogs, rawEditorCount: match.resolution.rawCount, logicalEditorCount: match.resolution.logicalCount, safeCandidates: match.resolution.safeCandidates };
       }
-      if (valid.length > 1) return { status: 'AMBIGUOUS', reason: 'COMPOSER_CONTAINER_AMBIGUOUS', message: 'Multiple Facebook composer containers are ready.', safeCandidates: lastCandidates };
+      if (ready.length > 1) return { status: 'AMBIGUOUS', reason: 'COMPOSER_CONTAINER_AMBIGUOUS', message: 'Multiple independent Create Post dialogs contain ready editors.', dialogCandidates: lastDialogs, rawEditorCount, logicalEditorCount, safeCandidates: lastCandidates };
+      if (ambiguousEditorCandidates.length) return { status: 'AMBIGUOUS', reason: 'COMPOSER_TEXTBOX_AMBIGUOUS', message: 'Multiple independent editors remain inside the Create Post dialog.', dialogCandidates: lastDialogs, rawEditorCount, logicalEditorCount, safeCandidates: ambiguousEditorCandidates };
       if (Date.now() >= deadline) {
-        if (containers.length > 1) return { status: 'AMBIGUOUS', reason: 'COMPOSER_CONTAINER_AMBIGUOUS', message: 'Multiple Facebook composer containers were visible without a unique ready editor.', safeCandidates: lastCandidates };
-        if (sawContainer) return { status: 'MISSING', reason: 'COMPOSER_TEXTBOX_NOT_FOUND', message: 'Facebook composer appeared, but its editor did not hydrate in time.', safeCandidates: lastCandidates };
-        return { status: 'MISSING', reason: 'COMPOSER_CONTAINER_NOT_FOUND', message: 'Facebook composer did not appear after the trigger was clicked.', safeCandidates: lastCandidates };
+        if (sawDialog) return { status: 'MISSING', reason: 'COMPOSER_TEXTBOX_NOT_FOUND', message: 'Create Post dialog appeared, but its editor did not hydrate in time.', dialogCandidates: lastDialogs, dialogTitle: lastTitle, rawEditorCount, logicalEditorCount, safeCandidates: lastCandidates };
+        return { status: 'MISSING', reason: 'COMPOSER_CONTAINER_NOT_FOUND', message: 'Create Post dialog did not appear after the trigger was clicked.', dialogCandidates: lastDialogs, dialogTitle: lastTitle, rawEditorCount, logicalEditorCount, safeCandidates: lastCandidates };
       }
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
   }
 
-  private async visibleComposerContainers(page: Page): Promise<Locator[]> {
-    const dialogs = await this.visibleLocators(page.locator('[role="dialog"]'), 10);
-    if (dialogs.length) return dialogs;
-    return this.visibleLocators(page.locator('form'), 10);
+  async findCreatePostDialog(page: Page, baseline?: ComposerDialogBaseline): Promise<CreatePostDialogResolution> {
+    const dialogs = await this.visibleLocators(page.locator('[role="dialog"]'), 20);
+    const candidates: CreatePostDialogCandidate[] = [];
+    for (const locator of dialogs) {
+      const metadata = await this.dialogMetadata(locator, baseline);
+      if (metadata.handle) await metadata.handle.dispose().catch(() => undefined);
+      if (!metadata.title || !metadata.visible || !metadata.foreground) continue;
+      candidates.push({ locator, title: metadata.title, summary: metadata.summary });
+    }
+    const safeCandidates = candidates.map((candidate) => candidate.summary);
+    if (!candidates.length) return { status: 'MISSING', count: 0, candidates: [], safeCandidates };
+    if (candidates.length > 1) return { status: 'AMBIGUOUS', count: candidates.length, candidates, safeCandidates };
+    return { status: 'FOUND', locator: candidates[0].locator, title: candidates[0].title, count: 1, candidates, safeCandidates };
   }
 
-  private async textboxMetadata(locator: Locator): Promise<{ tag: string; role: string; contenteditable: string; ariaLabel: string; placeholder: string; ariaMultiline: string; lexicalEditor: string; type: string; visible: boolean }> {
+  private async captureDialogBaseline(page: Page): Promise<ComposerDialogBaseline> {
+    const handles: ComposerDialogBaseline['handles'] = [];
+    const dialogs = await this.visibleLocators(page.locator('[role="dialog"]'), 20);
+    for (const locator of dialogs) {
+      const handle = await this.elementHandle(locator);
+      if (!handle) continue;
+      handles.push({ handle, title: await this.dialogTitle(locator) });
+    }
+    return { handles, capturedAt: new Date().toISOString() };
+  }
+
+  private async textboxMetadata(locator: Locator): Promise<TextboxMetadata> {
     const getAttribute = async (name: string): Promise<string> => typeof locator.getAttribute === 'function' ? await locator.getAttribute(name).catch(() => '') || '' : '';
     const tag = (typeof locator.evaluate === 'function' ? await locator.evaluate((node) => node.tagName).catch(() => '') : '').toLowerCase();
-    return { tag, role: (await getAttribute('role')).toLowerCase(), contenteditable: await getAttribute('contenteditable'), ariaLabel: await getAttribute('aria-label'), placeholder: await getAttribute('placeholder'), ariaMultiline: await getAttribute('aria-multiline'), lexicalEditor: await getAttribute('data-lexical-editor'), type: (await getAttribute('type')).toLowerCase(), visible: await locator.isVisible().catch(() => false) };
+    const placeholder = await getAttribute('placeholder') || await getAttribute('aria-placeholder') || await getAttribute('data-placeholder');
+    const visible = await locator.isVisible().catch(() => false);
+    const boundingBox = typeof locator.boundingBox === 'function' ? await locator.boundingBox().catch(() => undefined) : undefined;
+    let focusable = false;
+    if (visible && typeof locator.focus === 'function') {
+      await locator.focus().catch(() => undefined);
+      focusable = typeof locator.evaluate === 'function' && await locator.evaluate((node) => document.activeElement === node).catch(() => false);
+    }
+    return { tag, role: (await getAttribute('role')).toLowerCase(), contenteditable: await getAttribute('contenteditable'), ariaLabel: await getAttribute('aria-label'), placeholder, ariaMultiline: await getAttribute('aria-multiline'), lexicalEditor: await getAttribute('data-lexical-editor'), type: (await getAttribute('type')).toLowerCase(), visible, focusable, boundingBox: boundingBox ? { x: Math.round(boundingBox.x), y: Math.round(boundingBox.y), width: Math.round(boundingBox.width), height: Math.round(boundingBox.height) } : undefined };
   }
 
-  private textboxStrategy(metadata: { tag: string; role: string; contenteditable: string; ariaLabel: string; placeholder: string; ariaMultiline: string; lexicalEditor: string; type: string }, namedRole = false): string | undefined {
+  private textboxStrategy(metadata: TextboxMetadata, strategy: string, scopedToCreatePost: boolean): string | undefined {
     const editable = metadata.contenteditable.toLowerCase() === 'true';
     const roleTextbox = metadata.role === 'textbox';
     const multiline = metadata.ariaMultiline.toLowerCase() === 'true';
     const lexical = metadata.lexicalEditor.toLowerCase() === 'true';
     const label = `${metadata.ariaLabel} ${metadata.placeholder}`.trim();
-    if (roleTextbox && (namedRole || this.isKnownComposerText(label))) return 'NAMED_ROLE';
+    if (scopedToCreatePost) {
+      if (lexical && editable && roleTextbox) return 'CREATE_POST_LEXICAL';
+      if (lexical && editable) return 'CREATE_POST_LEXICAL';
+      if (editable && roleTextbox) return strategy === 'CREATE_POST_CONTENTEDITABLE' ? 'CREATE_POST_ROLE_TEXTBOX' : strategy;
+      if (editable && multiline) return 'CREATE_POST_CONTENTEDITABLE';
+      if (metadata.tag === 'textarea') return 'CREATE_POST_TEXTAREA';
+      if (metadata.tag === 'input' && (multiline || this.isKnownComposerText(label))) return 'CREATE_POST_INPUT';
+      return undefined;
+    }
+    if (roleTextbox && this.isKnownComposerText(label)) return 'NAMED_ROLE';
     if (lexical && editable) return 'LEXICAL_EDITOR';
     if (editable && roleTextbox) return 'ROLE_TEXTBOX';
     if (editable && multiline) return 'MULTILINE_CONTENTEDITABLE';
-    if (metadata.tag === 'textarea' && !this.isUtilityField(metadata)) return 'TEXTAREA';
-    if (metadata.tag === 'input' && !this.isUtilityField(metadata) && (multiline || this.isKnownComposerText(label))) return 'INPUT_COMPOSER';
+    if (metadata.tag === 'textarea') return 'TEXTAREA';
+    if (metadata.tag === 'input' && (multiline || this.isKnownComposerText(label))) return 'INPUT_COMPOSER';
     return undefined;
   }
 
   private isKnownComposerText(value: string): boolean { return Boolean(value && (this.isComposerTriggerText(value) || facebookText.composerTextbox.test(value))); }
-  private textboxMetadataKey(metadata: { tag: string; role: string; contenteditable: string; ariaLabel: string; placeholder: string; ariaMultiline: string; lexicalEditor: string; type: string }): string { return [metadata.tag, metadata.role, metadata.contenteditable, metadata.ariaLabel, metadata.placeholder, metadata.ariaMultiline, metadata.lexicalEditor, metadata.type].join('|'); }
-  private isUtilityField(metadata: { role: string; ariaLabel: string; placeholder: string; type: string }): boolean {
+  private isUtilityField(metadata: TextboxMetadata): boolean {
     const label = `${metadata.role} ${metadata.ariaLabel} ${metadata.placeholder}`.toLocaleLowerCase();
     return metadata.role === 'searchbox' || metadata.role === 'combobox' || metadata.type === 'search' || /search|tìm|tim kiem/.test(label);
   }
-  private toTextboxSummary(metadata: { tag: string; role: string; contenteditable: string; ariaLabel: string; placeholder: string; ariaMultiline: string; lexicalEditor: string; type: string; visible: boolean }): TextboxCandidateSummary {
+  private toTextboxSummary(metadata: TextboxMetadata): TextboxCandidateSummary {
     const truncate = (value: string): string | undefined => value ? value.replace(/\s+/g, ' ').trim().slice(0, 100) : undefined;
-    return { tag: truncate(metadata.tag), role: truncate(metadata.role), contenteditable: truncate(metadata.contenteditable), ariaLabel: truncate(metadata.ariaLabel), placeholder: truncate(metadata.placeholder), ariaMultiline: truncate(metadata.ariaMultiline), lexicalEditor: truncate(metadata.lexicalEditor), visible: metadata.visible };
+    return { tag: truncate(metadata.tag), role: truncate(metadata.role), contenteditable: truncate(metadata.contenteditable), ariaLabel: truncate(metadata.ariaLabel), placeholder: truncate(metadata.placeholder), ariaMultiline: truncate(metadata.ariaMultiline), lexicalEditor: truncate(metadata.lexicalEditor), visible: metadata.visible, boundingBox: metadata.boundingBox, focusable: metadata.focusable };
+  }
+
+  private async elementHandle(locator: Locator): Promise<ElementHandle<HTMLElement> | undefined> {
+    if (typeof locator.elementHandle !== 'function') return undefined;
+    return await locator.elementHandle().then((handle) => handle ? handle as ElementHandle<HTMLElement> : undefined).catch(() => undefined);
+  }
+
+  private normalizeDialogTitle(value: string): string {
+    return value.normalize('NFC').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim().replace(/[.:\u2026]+$/u, '').trim();
+  }
+
+  private isCreatePostTitle(value: string): boolean {
+    return facebookText.createPostTitle.test(this.normalizeDialogTitle(value));
+  }
+
+  private async dialogTitle(locator: Locator): Promise<string | undefined> {
+    const titleCandidates: Locator[] = [];
+    if (typeof locator.getByRole === 'function') titleCandidates.push(locator.getByRole('heading', { name: facebookText.createPostTitle }));
+    titleCandidates.push(locator.locator('h1, h2, h3, [role="heading"], [aria-level], span, div'));
+    for (const source of titleCandidates) {
+      const candidates = await this.boundedLocators(source, 80);
+      for (const candidate of candidates) {
+        if (!await candidate.isVisible().catch(() => false)) continue;
+        const text = ((typeof candidate.innerText === 'function' ? await candidate.innerText().catch(() => '') : '') || (typeof candidate.textContent === 'function' ? await candidate.textContent().catch(() => '') : '') || '').replace(/\s+/g, ' ').trim();
+        if (text && text.length <= 100 && this.isCreatePostTitle(text)) return text.slice(0, 100);
+      }
+    }
+    return undefined;
+  }
+
+  private async dialogForeground(locator: Locator): Promise<boolean> {
+    if (typeof locator.evaluate !== 'function') return false;
+    return await locator.evaluate((node) => {
+      const element = node as HTMLElement;
+      if (element.getAttribute('aria-hidden') === 'true') return false;
+      const rect = element.getBoundingClientRect();
+      if (!rect.width || !rect.height) return false;
+      const x = Math.min(Math.max(rect.left + rect.width / 2, 0), window.innerWidth - 1);
+      const y = Math.min(Math.max(rect.top + rect.height / 2, 0), window.innerHeight - 1);
+      const top = document.elementFromPoint(x, y);
+      return Boolean(top && (top === element || element.contains(top)));
+    }).catch(() => false);
+  }
+
+  private async sameElement(left: ElementHandle<HTMLElement>, right: ElementHandle<HTMLElement>): Promise<boolean> {
+    return await left.evaluate((node, other) => node === other, right).catch(() => false);
+  }
+
+  private async dialogMetadata(locator: Locator, baseline?: ComposerDialogBaseline): Promise<{ title?: string; visible: boolean; foreground: boolean; handle?: ElementHandle<HTMLElement>; summary: DialogCandidateSummary }> {
+    const visible = await locator.isVisible().catch(() => false);
+    const title = await this.dialogTitle(locator);
+    const foreground = visible && await this.dialogForeground(locator);
+    const handle = await this.elementHandle(locator);
+    let baselineEntry: { handle: ElementHandle<HTMLElement>; title?: string } | undefined;
+    if (handle && baseline) {
+      for (const entry of baseline.handles) {
+        if (await this.sameElement(handle, entry.handle)) { baselineEntry = entry; break; }
+      }
+    }
+    const changedAfterTrigger = Boolean(baselineEntry && baselineEntry.title !== title);
+    const summary: DialogCandidateSummary = { title: title?.slice(0, 100), newAfterTrigger: baseline ? Boolean(handle && !baselineEntry) : undefined, changedAfterTrigger: baseline ? changedAfterTrigger : undefined, visible, foreground };
+    return { title, visible, foreground, handle, summary };
+  }
+
+  private async domDepth(locator: Locator): Promise<number> {
+    if (typeof locator.evaluate !== 'function') return 0;
+    return await locator.evaluate((node) => {
+      let depth = 0; let current: Node | null = node;
+      while (current?.parentElement && depth < 100) { depth += 1; current = current.parentElement; }
+      return depth;
+    }).catch(() => 0);
+  }
+
+  private async relatedEditorNodes(left: RawEditorCandidate, right: RawEditorCandidate): Promise<boolean> {
+    if (!left.handle || !right.handle) return left.identity === right.identity;
+    return await left.handle.evaluate((node, other) => node === other || node.contains(other) || other.contains(node), right.handle).catch(() => false) || this.overlappingBoxes(left.metadata.boundingBox, right.metadata.boundingBox);
+  }
+
+  private overlappingBoxes(left?: TextboxMetadata['boundingBox'], right?: TextboxMetadata['boundingBox']): boolean {
+    if (!left || !right || !left.width || !left.height || !right.width || !right.height) return false;
+    const overlapWidth = Math.max(0, Math.min(left.x + left.width, right.x + right.width) - Math.max(left.x, right.x));
+    const overlapHeight = Math.max(0, Math.min(left.y + left.height, right.y + right.height) - Math.max(left.y, right.y));
+    const overlap = overlapWidth * overlapHeight;
+    return overlap / Math.min(left.width * left.height, right.width * right.height) >= 0.8;
+  }
+
+  private async groupEditorCandidates(candidates: RawEditorCandidate[]): Promise<LogicalEditorGroup[]> {
+    const groups: LogicalEditorGroup[] = [];
+    for (const candidate of candidates) {
+      const matching = [];
+      for (const group of groups) {
+        let related = false;
+        for (const member of group.candidates) {
+          if (await this.relatedEditorNodes(member, candidate)) { related = true; break; }
+        }
+        if (related) matching.push(group);
+      }
+      if (!matching.length) groups.push({ id: groups.length + 1, candidates: [candidate] });
+      else {
+        const target = matching[0]; target.candidates.push(candidate);
+        for (const extra of matching.slice(1)) { target.candidates.push(...extra.candidates); groups.splice(groups.indexOf(extra), 1); }
+      }
+    }
+    groups.forEach((group, index) => { group.id = index + 1; });
+    return groups;
+  }
+
+  private selectEditorSurface(group: LogicalEditorGroup): RawEditorCandidate | undefined {
+    const score = (candidate: RawEditorCandidate): number => {
+      const metadata = candidate.metadata; const editable = metadata.contenteditable.toLowerCase() === 'true'; const lexical = metadata.lexicalEditor.toLowerCase() === 'true'; const role = metadata.role === 'textbox';
+      let value = metadata.tag === 'textarea' ? 20 : metadata.tag === 'input' ? 10 : 0;
+      if (editable) value += 30; if (role) value += 40; if (lexical) value += 50; if (metadata.focusable) value += 100;
+      if (facebookText.composerPlaceholder.test(`${metadata.placeholder}`)) value += 10;
+      return value + Math.min(candidate.depth, 100) / 100;
+    };
+    return [...group.candidates].sort((left, right) => score(right) - score(left))[0];
   }
 
   async preflight(page: Page, item: QueueRecord, fillContent = false, captureDiagnostic?: PreflightDiagnosticCapture): Promise<{ probe: SelectorProbeResult; filledContent: boolean; handle?: ComposerHandle }> {
@@ -290,14 +485,17 @@ export class FacebookComposerAdapter {
       base.warnings.push(reason);
       let diagnosticPath: string | undefined;
       if (captureDiagnostic && ['COMPOSER_TRIGGER_CLICK_FAILED', 'COMPOSER_TRIGGER_CLICK_NO_COMPOSER', 'COMPOSER_CONTAINER_NOT_FOUND', 'COMPOSER_CONTAINER_AMBIGUOUS', 'COMPOSER_TEXTBOX_NOT_FOUND', 'COMPOSER_TEXTBOX_AMBIGUOUS'].includes(code)) { try { diagnosticPath = await captureDiagnostic(page, status); } catch { /* diagnostics must never block preflight */ } }
-      const textboxCandidates = error instanceof ComposerReadinessError ? error.textboxCandidates : [];
-      return { probe: { ...base, status, reason, session: { status: 'FOUND' }, group: { status: 'FOUND' }, composerTrigger: { status: 'FOUND', count: 1 }, composerTextbox: { status: status === 'AMBIGUOUS' ? 'AMBIGUOUS' : 'MISSING', reason }, mediaInput: EMPTY_FIELD, postButton: EMPTY_FIELD, uploadBusy: EMPTY_FIELD, approvalSignal: EMPTY_FIELD, acceptanceSignal: EMPTY_FIELD, triggerStrategy: triggerResolution.strategy, triggerCandidates: triggerResolution.safeCandidates, textboxCandidates, diagnosticPath }, filledContent: false };
+      const readiness = error instanceof ComposerReadinessError ? error : undefined;
+      const textboxCandidates = readiness?.textboxCandidates ?? [];
+      const dialogCandidates = readiness?.dialogCandidates ?? [];
+      const dialogStatus: SelectorProbeField['status'] = code === 'COMPOSER_CONTAINER_AMBIGUOUS' ? 'AMBIGUOUS' : dialogCandidates.length ? 'FOUND' : 'MISSING';
+      return { probe: { ...base, status, reason, session: { status: 'FOUND' }, group: { status: 'FOUND' }, composerTrigger: { status: 'FOUND', count: 1 }, composerTextbox: { status: status === 'AMBIGUOUS' ? 'AMBIGUOUS' : 'MISSING', reason }, mediaInput: EMPTY_FIELD, postButton: EMPTY_FIELD, uploadBusy: EMPTY_FIELD, approvalSignal: EMPTY_FIELD, acceptanceSignal: EMPTY_FIELD, createPostDialog: { status: dialogStatus, count: dialogCandidates.length }, dialogTitle: readiness?.dialogTitle, dialogCandidates, rawEditorCount: readiness?.rawEditorCount, logicalEditorCount: readiness?.logicalEditorCount, triggerStrategy: triggerResolution.strategy, triggerCandidates: triggerResolution.safeCandidates, textboxCandidates, diagnosticPath }, filledContent: false };
     }
     const mediaInputCandidates = await this.visibleCandidates([handle.container.locator('input[type="file"]')]);
     const mediaInput = mediaInputCandidates.length === 1 ? mediaInputCandidates[0] : undefined;
     const requiresMedia = item.media.length > 0;
     const mediaStatus = mediaInput ? { status: 'FOUND' as const, count: 1 } : mediaInputCandidates.length > 1 ? { status: 'AMBIGUOUS' as const, count: mediaInputCandidates.length } : requiresMedia ? { status: 'MISSING' as const, count: 0 } : { status: 'NOT_TESTED' as const, count: 0, reason: 'No media is required for this snapshot.' };
-    const statuses = { session: { status: 'FOUND' as const }, group: { status: 'FOUND' as const }, composerTrigger: { status: 'FOUND' as const, count: 1 }, composerTextbox: { status: 'FOUND' as const, count: 1 }, mediaInput: mediaStatus, postButton: EMPTY_FIELD, uploadBusy: { status: (await handle.container.getByText(facebookText.uploadBusy).count().catch(() => 0)) ? 'FOUND' as const : 'NOT_TESTED' as const }, approvalSignal: { status: (await handle.container.getByText(facebookText.pendingApproval).count().catch(() => 0)) ? 'FOUND' as const : 'NOT_TESTED' as const }, acceptanceSignal: { status: (await handle.container.getByText(facebookText.accepted).count().catch(() => 0)) ? 'FOUND' as const : 'NOT_TESTED' as const } };
+    const statuses = { session: { status: 'FOUND' as const }, group: { status: 'FOUND' as const }, composerTrigger: { status: 'FOUND' as const, count: 1 }, composerTextbox: { status: 'FOUND' as const, count: 1 }, mediaInput: mediaStatus, postButton: EMPTY_FIELD, createPostDialog: { status: 'FOUND' as const, count: handle.dialogCandidates?.length ?? 1 }, uploadBusy: { status: (await handle.container.getByText(facebookText.uploadBusy).count().catch(() => 0)) ? 'FOUND' as const : 'NOT_TESTED' as const }, approvalSignal: { status: (await handle.container.getByText(facebookText.pendingApproval).count().catch(() => 0)) ? 'FOUND' as const : 'NOT_TESTED' as const }, acceptanceSignal: { status: (await handle.container.getByText(facebookText.accepted).count().catch(() => 0)) ? 'FOUND' as const : 'NOT_TESTED' as const } };
     const expectedContent = this.composeContent(item.body, item.linkUrl);
     let entry: ComposerContentEntry | undefined;
     let postButtonCandidates = await this.visibleCandidates([handle.container.getByRole('button', { name: facebookText.postButton }), handle.container.locator('[role="button"]').filter({ hasText: facebookText.postButton })]);
@@ -320,7 +518,7 @@ export class FacebookComposerAdapter {
     else if (fillContent && postButtonStatus.count === 1 && postButtonStatus.enabled === false) { status = 'MISSING'; reason = `Post remained disabled after verified composer content. Entry method: ${entry?.method ?? 'UNKNOWN'}.`; }
     else if (postButtonStatus.status === 'AMBIGUOUS') { status = 'AMBIGUOUS'; reason = 'POST_BUTTON_AMBIGUOUS'; }
     else if (postButtonStatus.count === 0) { status = 'MISSING'; reason = 'POST_BUTTON_NOT_FOUND'; }
-    const probe: SelectorProbeResult = { ...base, status, reason, ...statuses, postButton: postButtonStatus, editorType: entry?.editorType, contentObserved: entry?.visibleContentPresent, observedContentLength: entry?.contentLength, expectedContentLength: entry?.expectedLength, entryMethod: entry?.method, triggerStrategy: triggerResolution.strategy, triggerCandidates: triggerResolution.safeCandidates, textboxStrategy: handle.textboxStrategy, textboxCandidates: handle.textboxCandidates };
+    const probe: SelectorProbeResult = { ...base, status, reason, ...statuses, postButton: postButtonStatus, editorType: entry?.editorType, contentObserved: entry?.visibleContentPresent, observedContentLength: entry?.contentLength, expectedContentLength: entry?.expectedLength, entryMethod: entry?.method, triggerStrategy: triggerResolution.strategy, triggerCandidates: triggerResolution.safeCandidates, textboxStrategy: handle.textboxStrategy, textboxCandidates: handle.textboxCandidates, dialogTitle: handle.dialogTitle, dialogCandidates: handle.dialogCandidates, rawEditorCount: handle.rawEditorCount, logicalEditorCount: handle.logicalEditorCount };
     if (reason) base.warnings.push(reason);
     if (captureDiagnostic && status !== 'FOUND') {
       try { probe.diagnosticPath = await captureDiagnostic(page, status); } catch { /* diagnostics must never block preflight */ }
@@ -504,9 +702,9 @@ export class FacebookComposerAdapter {
     if (await container.isVisible().catch(() => false)) return 'Composer could not be safely dismissed after preflight.';
     return undefined;
   }
-  private async boundedLocators(locator: Locator, limit: number): Promise<Locator[]> { const candidates: Locator[] = []; const count = Math.min(await locator.count().catch(() => 0), limit); for (let index = 0; index < count; index++) candidates.push(locator.nth(index)); return candidates; }
-  private async visibleLocators(locator: Locator, limit: number): Promise<Locator[]> { const visible: Locator[] = []; const count = Math.min(await locator.count().catch(() => 0), limit); for (let index = 0; index < count; index++) { const candidate = locator.nth(index); if (await candidate.isVisible().catch(() => false)) visible.push(candidate); } return visible; }
-  private async visibleCandidates(locators: Locator[]): Promise<Locator[]> { const visible: Locator[] = []; for (const locator of locators) { const count = Math.min(await locator.count().catch(() => 0), 10); for (let index = 0; index < count; index++) { const candidate = locator.nth(index); if (await candidate.isVisible().catch(() => false)) visible.push(candidate); } if (visible.length) break; } return visible; }
+  private async boundedLocators(locator: Locator, limit: number): Promise<Locator[]> { const candidates: Locator[] = []; if (typeof locator.count !== 'function') return candidates; const count = Math.min(await locator.count().catch(() => 0), limit); for (let index = 0; index < count; index++) candidates.push(locator.nth(index)); return candidates; }
+  private async visibleLocators(locator: Locator, limit: number): Promise<Locator[]> { const visible: Locator[] = []; if (typeof locator.count !== 'function') return visible; const count = Math.min(await locator.count().catch(() => 0), limit); for (let index = 0; index < count; index++) { const candidate = locator.nth(index); if (await candidate.isVisible().catch(() => false)) visible.push(candidate); } return visible; }
+  private async visibleCandidates(locators: Locator[]): Promise<Locator[]> { const visible: Locator[] = []; for (const locator of locators) { if (typeof locator.count !== 'function') continue; const count = Math.min(await locator.count().catch(() => 0), 10); for (let index = 0; index < count; index++) { const candidate = locator.nth(index); if (await candidate.isVisible().catch(() => false)) visible.push(candidate); } if (visible.length) break; } return visible; }
   private async candidateUrls(page: Page): Promise<string[]> { return (await this.postCandidates(page)).map((candidate) => candidate.canonicalUrl); }
   private async postCandidates(page: Page): Promise<PostCandidate[]> {
     const links = page.locator('a[href*="/posts/"], a[href*="permalink"], a[href*="story_fbid"]'); const count = Math.min(await links.count().catch(() => 0), 200); const candidates: PostCandidate[] = []; const seen = new Set<string>();

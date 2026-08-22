@@ -1,5 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
-import type { Locator, Page } from 'playwright';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { chromium, type Locator, type Page } from 'playwright';
+import { existsSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import type { QueueRecord } from '@main/db/repositories/QueueRepository';
 import { FacebookComposerAdapter, candidateContentMatches, correlateNewPostUrl, hasPublishableContent, normalizePostCandidateUrl, probePostButton } from './FacebookComposerAdapter';
 import { FACEBOOK_SELECTORS_VERSION, facebookText } from './selectors/facebookSelectors';
@@ -14,6 +16,13 @@ function fakeComposer(state: FakeState, descriptor: TriggerDescriptor = { role: 
     isVisible: vi.fn(async () => true),
     isEnabled: vi.fn(async () => state.enabled),
     click: vi.fn(async () => undefined)
+  } as unknown as Locator;
+  const dialogTitle = {
+    count: vi.fn(async () => 1),
+    nth: vi.fn(() => dialogTitle),
+    isVisible: vi.fn(async () => true),
+    innerText: vi.fn(async () => 'Tạo bài viết'),
+    textContent: vi.fn(async () => 'Tạo bài viết')
   } as unknown as Locator;
   const empty = { count: vi.fn(async () => 0), nth: vi.fn(() => empty), isVisible: vi.fn(async () => false), locator: vi.fn(() => empty), getByRole: vi.fn(() => empty), getByText: vi.fn(() => empty) } as unknown as Locator;
   const trigger = { count: vi.fn(async () => 1), nth: vi.fn(() => trigger), isVisible: vi.fn(async () => true), click: vi.fn(async () => undefined), getAttribute: vi.fn(async (name: string) => name === 'role' ? descriptor.role : name === 'aria-label' ? descriptor.ariaLabel ?? '' : name === 'title' ? descriptor.title ?? '' : ''), evaluate: vi.fn(async () => descriptor.tag), innerText: vi.fn(async () => descriptor.text ?? ''), textContent: vi.fn(async () => descriptor.text ?? '') } as unknown as Locator;
@@ -34,10 +43,11 @@ function fakeComposer(state: FakeState, descriptor: TriggerDescriptor = { role: 
     page: vi.fn(() => page)
   } as unknown as Locator;
   const container = {
-    getByRole: vi.fn((role: string, options?: { name?: unknown }) => role === 'textbox' && options?.name === undefined ? textbox : String(options?.name ?? '').toLowerCase().includes('post') ? post : empty),
+    getByRole: vi.fn((role: string, options?: { name?: unknown }) => role === 'heading' ? dialogTitle : role === 'textbox' && options?.name === undefined ? textbox : String(options?.name ?? '').toLowerCase().includes('post') ? post : empty),
     locator: vi.fn((selector: string) => selector.includes('input[type="file"]') ? empty : selector.includes('contenteditable') ? (++hydrationReads > hydrationCycles ? textbox : empty) : { filter: vi.fn(() => empty) }),
     getByText: vi.fn(() => empty),
-    isVisible: vi.fn(async () => true)
+    isVisible: vi.fn(async () => true),
+    evaluate: vi.fn(async () => true)
   } as unknown as Locator;
   return { page, textbox, container, post };
 }
@@ -92,7 +102,7 @@ function actualAdapterFor(fake: ReturnType<typeof fakeComposer>): FacebookCompos
 
 describe('FacebookComposerAdapter content handling', () => {
   it('uses the versioned selector set', () => {
-    expect(FACEBOOK_SELECTORS_VERSION).toBe('2026-08-v3');
+    expect(FACEBOOK_SELECTORS_VERSION).toBe('2026-08-v4');
   });
 
   it('resolves the live Vietnamese trigger variant through the central resolver', async () => {
@@ -156,7 +166,7 @@ describe('FacebookComposerAdapter content handling', () => {
     const fake = fakeComposer(state, undefined, 18); const adapter = actualAdapterFor(fake);
     const result = await adapter.preflight(fake.page, queueItem('Hydration race'), true);
     expect(result.probe.status).toBe('FOUND');
-    expect(result.probe.textboxStrategy).toBe('LEXICAL_EDITOR');
+    expect(result.probe.textboxStrategy).toBe('CREATE_POST_LEXICAL');
     expect(result.probe.reason).toBeUndefined();
     expect(fake.post.click).not.toHaveBeenCalled();
   });
@@ -167,10 +177,10 @@ describe('FacebookComposerAdapter content handling', () => {
     fake.container.locator = vi.fn((selector: string) => selector.includes('contenteditable') ? utility.locator('[role="textbox"]') : { filter: vi.fn(() => ({ count: vi.fn(async () => 0), nth: vi.fn(), isVisible: vi.fn(async () => false) })) }) as unknown as typeof fake.container.locator;
     const adapter = actualAdapterFor(fake);
     await fake.page.getByRole('button').click();
-    const ready = await (adapter as unknown as { waitForComposerReady: (page: Page, timeoutMs: number) => Promise<{ status: string; reason: string; safeCandidates: unknown[] }> }).waitForComposerReady(fake.page, 1000);
+    const ready = await (adapter as unknown as { waitForComposerReady: (page: Page, baseline: { handles: []; capturedAt: string }, timeoutMs: number) => Promise<{ status: string; reason: string; safeCandidates: unknown[] }> }).waitForComposerReady(fake.page, { handles: [], capturedAt: '' }, 1000);
     expect(ready).toMatchObject({ status: 'MISSING', reason: 'COMPOSER_TEXTBOX_NOT_FOUND' });
     expect(ready.safeCandidates.length).toBeGreaterThan(0);
-  });
+  }, 10000);
 
   it('captures early diagnostics when the trigger is missing', async () => {
     const adapter = new FacebookComposerAdapter(); vi.spyOn(adapter, 'openGroup').mockResolvedValue(undefined);
@@ -277,5 +287,137 @@ describe('FacebookComposerAdapter content handling', () => {
     expect(hasPublishableContent({ body: '', linkUrl: undefined, media: [] })).toBe(false);
     expect(hasPublishableContent({ body: 'Body', linkUrl: undefined, media: [] })).toBe(true);
     expect(hasPublishableContent({ body: '', linkUrl: undefined, media: [{ id: 'media' }] as never })).toBe(true);
+  });
+});
+
+describe('Facebook Create Post dialog scoping with local DOM fixtures', () => {
+  let browser: Awaited<ReturnType<typeof chromium.launch>>;
+
+  function localChromiumExecutable(): string | undefined {
+    const root = join(process.cwd(), 'node_modules', 'playwright-core', '.local-browsers');
+    const version = readdirSync(root, { withFileTypes: true }).find((entry) => entry.isDirectory() && entry.name.startsWith('chromium-') && (existsSync(join(root, entry.name, 'chrome-win64', 'chrome.exe')) || existsSync(join(root, entry.name, 'chrome-win', 'chrome.exe'))));
+    if (!version) return undefined;
+    const folder = existsSync(join(root, version.name, 'chrome-win64', 'chrome.exe')) ? 'chrome-win64' : 'chrome-win';
+    return join(root, version.name, folder, 'chrome.exe');
+  }
+
+  beforeAll(async () => { browser = await chromium.launch({ headless: true, executablePath: localChromiumExecutable() }); });
+  afterAll(async () => { await browser?.close(); });
+
+  async function fixture(markup: string): Promise<{ page: Page; close: () => Promise<void> }> {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    await page.setContent(`<main>${markup}</main>`);
+    return { page, close: () => page.close() };
+  }
+
+  function adapterForPage(adapter: FacebookComposerAdapter): void {
+    vi.spyOn(adapter, 'openGroup').mockResolvedValue(undefined);
+  }
+
+  it('deduplicates one DOM node matched by Lexical, role, and contenteditable selectors', async () => {
+    const { page, close } = await fixture('<div id="dialog" role="dialog" style="position:fixed;left:100px;top:100px;width:600px;height:400px;background:white"><h2>Create post</h2><div id="editor" role="textbox" contenteditable="true" data-lexical-editor="true" aria-label="Viết bình luận công khai..."></div></div>');
+    try {
+      const result = await new FacebookComposerAdapter().findComposerTextbox(page.locator('[role="dialog"]'), { createPostScope: true });
+      expect(result).toMatchObject({ status: 'FOUND', rawCount: 3, logicalCount: 1, strategy: 'CREATE_POST_LEXICAL' });
+    } finally { await close(); }
+  });
+
+  it('collapses nested editor wrappers and selects the focusable inner surface', async () => {
+    const { page, close } = await fixture('<div role="dialog" style="position:fixed;left:100px;top:100px;width:600px;height:400px;background:white"><h2>Create post</h2><div id="outer" contenteditable="true" data-lexical-editor="true" style="width:500px;height:100px"><div id="inner" role="textbox" contenteditable="true" data-lexical-editor="true" tabindex="0" style="width:500px;height:100px"></div></div></div>');
+    try {
+      const adapter = new FacebookComposerAdapter();
+      const result = await adapter.findComposerTextbox(page.locator('[role="dialog"]'), { createPostScope: true });
+      expect(result).toMatchObject({ status: 'FOUND', logicalCount: 1, strategy: 'CREATE_POST_LEXICAL' });
+      await expect(result.locator!.getAttribute('id')).resolves.toBe('inner');
+    } finally { await close(); }
+  });
+
+  it('accepts the real misleading Vietnamese aria-label inside the Create Post dialog', async () => {
+    const { page, close } = await fixture('<div role="dialog" style="position:fixed;left:100px;top:100px;width:600px;height:400px;background:white"><h2>Tạo bài viết</h2><div role="textbox" contenteditable="true" data-lexical-editor="true" aria-label="Viết bình luận công khai..."></div></div>');
+    try {
+      const adapter = new FacebookComposerAdapter();
+      const baseline = await adapter.findCreatePostDialog(page);
+      expect(baseline).toMatchObject({ status: 'FOUND', title: 'Tạo bài viết', count: 1 });
+      const result = await adapter.findComposerTextbox(baseline.locator!, { createPostScope: true });
+      expect(result).toMatchObject({ status: 'FOUND', strategy: 'CREATE_POST_LEXICAL', logicalCount: 1 });
+    } finally { await close(); }
+  });
+
+  it('uses an exact fallback title and ignores hidden unrelated dialogs', async () => {
+    const { page, close } = await fixture('<div role="dialog" style="display:none"><h2>Create post</h2><div role="textbox" contenteditable="true" data-lexical-editor="true"></div></div><div role="dialog" style="position:fixed;left:100px;top:100px;width:600px;height:400px;background:white"><div>Tạo bài viết</div><div role="textbox" contenteditable="true" data-lexical-editor="true"></div></div>');
+    try {
+      const result = await new FacebookComposerAdapter().findCreatePostDialog(page);
+      expect(result).toMatchObject({ status: 'FOUND', count: 1, title: 'Tạo bài viết' });
+    } finally { await close(); }
+  });
+
+  it('ignores feed comment editors with the same aria-label outside the selected dialog', async () => {
+    const { page, close } = await fixture('<article><div role="textbox" contenteditable="true" aria-label="Viết bình luận công khai..."></div><div role="textbox" contenteditable="true" aria-label="Viết bình luận công khai..."></div></article><div role="dialog" style="position:fixed;left:100px;top:100px;width:600px;height:400px;background:white"><h2>Tạo bài viết</h2><div id="post-editor" role="textbox" contenteditable="true" data-lexical-editor="true" aria-label="Viết bình luận công khai..."></div></div>');
+    try {
+      const adapter = new FacebookComposerAdapter();
+      const dialog = await adapter.findCreatePostDialog(page);
+      const result = await adapter.findComposerTextbox(dialog.locator!, { createPostScope: true });
+      expect(result).toMatchObject({ status: 'FOUND', logicalCount: 1 });
+      await expect(result.locator!.getAttribute('id')).resolves.toBe('post-editor');
+    } finally { await close(); }
+  });
+
+  it('uses the post-trigger dialog baseline and waits for delayed editor hydration', async () => {
+    const { page, close } = await fixture('<button id="trigger" aria-label="Create post">Create post</button><script>document.getElementById("trigger").onclick=()=>{const d=document.createElement("div");d.setAttribute("role","dialog");d.style.cssText="position:fixed;left:100px;top:100px;width:600px;height:400px;background:white";d.innerHTML="<h2>Create post</h2>";document.body.append(d);setTimeout(()=>{d.insertAdjacentHTML("beforeend",`<div id="hydrated" role="textbox" contenteditable="true" data-lexical-editor="true"></div><button aria-label="Close">Close</button>`);},150);};</script>');
+    try {
+      const adapter = new FacebookComposerAdapter();
+      adapterForPage(adapter);
+      const handle = await adapter.openComposer(page);
+      expect(handle.dialogTitle).toBe('Create post');
+      expect(handle.dialogCandidates?.[0]).toMatchObject({ newAfterTrigger: true, visible: true, foreground: true });
+      expect(handle.textboxStrategy).toBe('CREATE_POST_LEXICAL');
+    } finally { await close(); }
+  });
+
+  it('runs the complete scoped preflight and never clicks Post', async () => {
+    const { page, close } = await fixture('<button id="trigger" aria-label="Create post">Create post</button>');
+    await page.evaluate(() => {
+      document.body.dataset.postClicks = '0';
+      document.getElementById('trigger')?.addEventListener('click', () => {
+        const dialog = document.createElement('div'); dialog.setAttribute('role', 'dialog'); dialog.style.cssText = 'position:fixed;left:100px;top:100px;width:600px;height:400px;background:white';
+        dialog.innerHTML = '<h2>Tạo bài viết</h2><div id="editor" role="textbox" contenteditable="true" data-lexical-editor="true" aria-label="Viết bình luận công khai..."></div><button id="post" disabled>Post</button><button id="close" aria-label="Close">Close</button>';
+        const editor = dialog.querySelector('#editor') as HTMLElement; const post = dialog.querySelector('#post') as HTMLButtonElement;
+        editor.addEventListener('input', () => { post.disabled = !editor.innerText.trim(); });
+        post.addEventListener('click', () => { document.body.dataset.postClicks = String(Number(document.body.dataset.postClicks ?? '0') + 1); });
+        dialog.querySelector('#close')?.addEventListener('click', () => dialog.remove()); document.body.append(dialog);
+      });
+    });
+    try {
+      const adapter = new FacebookComposerAdapter();
+      adapterForPage(adapter);
+      const result = await adapter.preflight(page, queueItem('Scoped preflight content'), true);
+      expect(result.probe).toMatchObject({ status: 'FOUND', selectorVersion: '2026-08-v4', createPostDialog: { status: 'FOUND' }, dialogTitle: 'Tạo bài viết', textboxStrategy: 'CREATE_POST_LEXICAL', contentObserved: true, postButton: { status: 'FOUND', enabled: true } });
+      await expect(page.locator('body').getAttribute('data-post-clicks')).resolves.toBe('0');
+    } finally { await close(); }
+  });
+
+  it('returns container ambiguity for two independent ready Create Post dialogs', async () => {
+    const { page, close } = await fixture('<button id="trigger" aria-label="Create post">Create post</button>');
+    await page.evaluate(() => {
+      document.getElementById('trigger')?.addEventListener('click', () => {
+        for (let index = 0; index < 2; index += 1) {
+          const dialog = document.createElement('div'); dialog.setAttribute('role', 'dialog'); dialog.style.cssText = `position:fixed;left:${100 + index * 600}px;top:100px;width:500px;height:300px;background:white`;
+          dialog.innerHTML = '<h2>Create post</h2><div role="textbox" contenteditable="true" data-lexical-editor="true"></div><button aria-label="Post">Post</button>'; document.body.append(dialog);
+        }
+      });
+    });
+    try {
+      const adapter = new FacebookComposerAdapter();
+      adapterForPage(adapter);
+      await expect(adapter.openComposer(page)).rejects.toMatchObject({ code: 'COMPOSER_CONTAINER_AMBIGUOUS' });
+    } finally { await close(); }
+  }, 10000);
+  it('selects the only focusable editor when another distinct editor is disabled', async () => {
+    const { page, close } = await fixture('<div role="dialog" style="position:fixed;left:100px;top:100px;width:600px;height:400px;background:white"><h2>Create post</h2><textarea disabled></textarea><div id="active" role="textbox" contenteditable="true" data-lexical-editor="true" tabindex="0" style="margin-top:20px;width:500px;height:100px"></div></div>');
+    try {
+      const result = await new FacebookComposerAdapter().findComposerTextbox(page.locator('[role="dialog"]'), { createPostScope: true });
+      expect(result).toMatchObject({ status: 'FOUND', logicalCount: 2 });
+      await expect(result.locator!.getAttribute('id')).resolves.toBe('active');
+    } finally { await close(); }
   });
 });

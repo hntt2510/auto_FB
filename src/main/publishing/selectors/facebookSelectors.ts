@@ -1,8 +1,10 @@
-export const FACEBOOK_SELECTORS_VERSION = '2026-08-v3';
+export const FACEBOOK_SELECTORS_VERSION = '2026-08-v4';
 
 export const facebookText = {
   composerTrigger: /write something|create post|what(?:'|\u2019)s on your mind|create a public post|vi\u1ebft g\u00ec \u0111\u00f3|vi\u1ebft g\u00ec \u0111i|b\u1ea1n \u0111ang ngh\u0129 g\u00ec|b\u1ea1n vi\u1ebft g\u00ec \u0111i|b\u1ea1n mu\u1ed1n chia s\u1ebb g\u00ec|chia s\u1ebb g\u00ec \u0111\u00f3|t\u1ea1o b\u00e0i vi\u1ebft|t\u1ea1o b\u00e0i vi\u1ebft c\u00f4ng khai/i,
   composerTextbox: /what(?:'|\u2019)s on your mind|write something|create a public post|b\u1ea1n \u0111ang ngh\u0129 g\u00ec|vi\u1ebft g\u00ec \u0111\u00f3|vi\u1ebft g\u00ec \u0111i/i,
+  createPostTitle: /^(?:create\s+post|t\u1ea1o\s+b\u00e0i\s+vi\u1ebft)\s*[.:\u2026]?$/iu,
+  composerPlaceholder: /^(?:t\u1ea1o\s+b\u00e0i\s+vi\u1ebft\s+c\u00f4ng\s+khai|create\s+a\s+public\s+post|what(?:'|\u2019)s\s+on\s+your\s+mind|b\u1ea1n\s+\u0111ang\s+ngh\u0129\s+g\u00ec|vi\u1ebft\s+g\u00ec\s+\u0111\u00f3)\s*(?:\u2026|\.\.\.)?$/iu,
   postButton: /^(post|publish|\u0111\u0103ng|\u0111\u0103ng b\u00e0i)$/i,
   uploadBusy: /uploading|processing|preparing|\u0111ang t\u1ea3i|\u0111ang x\u1eed l\u00fd|\u0111ang chu\u1ea9n b\u1ecb/i,
   pendingApproval: /pending approval|awaiting approval|submitted for approval|ch\u1edd ph\u00ea duy\u1ec7t|\u0111ang ch\u1edd duy\u1ec7t/i,

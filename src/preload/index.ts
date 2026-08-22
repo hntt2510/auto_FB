@@ -106,6 +106,7 @@ const settingsApi: PublishingSettingsApi = {
 };
 
 contextBridge.exposeInMainWorld('accountApi', accountApi);
+contextBridge.exposeInMainWorld('appBridge', { available: true, version: '1' });
 contextBridge.exposeInMainWorld('logApi', logApi);
 contextBridge.exposeInMainWorld('groupApi', groupApi);
 contextBridge.exposeInMainWorld('draftApi', draftApi);

@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { existsSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { runMigrations } from './migrations';
+import { LATEST_SCHEMA_VERSION, runMigrations } from './migrations';
 
 export type AppPaths = { dataRoot: string; database: string; profiles: string; logs: string; media: string; diagnostics: string; backups: string };
 
@@ -37,10 +37,12 @@ export function openDatabase(paths: AppPaths): Database.Database {
   db.pragma('busy_timeout = 5000');
   let current = 0;
   try { current = (db.prepare("SELECT MAX(version) AS version FROM schema_migrations").get() as { version: number | null } | undefined)?.version ?? 0; } catch { current = 0; }
-  if (existsSync(paths.database) && current > 0 && current < 4) backupDatabaseSync(db, paths.backups);
+  if (existsSync(paths.database) && shouldBackupBeforeMigrations(current, LATEST_SCHEMA_VERSION)) backupDatabaseSync(db, paths.backups);
   runMigrations(db);
   return db;
 }
+
+export function shouldBackupBeforeMigrations(currentVersion: number, latestVersion: number): boolean { return currentVersion > 0 && currentVersion < latestVersion; }
 
 export function backupDatabaseSync(db: Database.Database, backupRoot: string, now = new Date()): string {
   mkdirSync(backupRoot, { recursive: true });

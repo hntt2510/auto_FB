@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, safeStorage } from 'electron';
 import { join } from 'node:path';
+import { existsSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { createAppPaths, openDatabase } from './db/database';
 import { AccountRepository } from './db/repositories/AccountRepository';
@@ -69,7 +70,6 @@ if (!gotLock) {
       encryptString: (value) => safeStorage.encryptString(value),
       decryptString: (value) => safeStorage.decryptString(value)
     }), () => { if (service) broadcastAccounts(service); });
-    createWindow();
     cleanupIpc = registerIpc(service, () => new Set(BrowserWindow.getAllWindows().map((current) => current.webContents.id)));
     registerMediaProtocol(drafts, media);
     const workspaceNotify = () => { broadcastPublishingChanged(); };
@@ -89,6 +89,7 @@ if (!gotLock) {
       publishing,
       settings: publishingSettings
     }, () => new Set(BrowserWindow.getAllWindows().map((current) => current.webContents.id))));
+    createWindow();
     app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
   }).catch((error) => {
     console.error('Application startup failed:', error instanceof Error ? error.message : error);
@@ -116,14 +117,19 @@ function chainCleanup(first: () => void | undefined, second: () => void): () => 
 function createWindow(): BrowserWindow {
   const rendererPath = join(__dirname, '../renderer/index.html');
   const applicationUrl = process.env.ELECTRON_RENDERER_URL ?? pathToFileURL(rendererPath).toString();
+  const preloadPath = join(__dirname, '../preload/index.cjs');
+  if (!existsSync(preloadPath)) throw new Error('Preload bridge bundle is missing: ' + preloadPath);
   const window = new BrowserWindow({
     width: 1280,
     height: 820,
     minWidth: 980,
     minHeight: 640,
     backgroundColor: '#0f172a',
-    webPreferences: { preload: join(__dirname, '../preload/index.mjs'), contextIsolation: true, nodeIntegration: false, sandbox: true }
+    webPreferences: { preload: preloadPath, contextIsolation: true, nodeIntegration: false, sandbox: true }
   });
+  window.webContents.on('preload-error', (_event, preload, error) => console.error('Preload failed:', sanitizeRuntimeMessage(preload + ': ' + error.message)));
+  window.webContents.on('console-message', (details) => { if (details.level === 'error') console.error('Renderer console:', sanitizeRuntimeMessage(details.message)); });
+  window.webContents.on('did-fail-load', (_event, errorCode, errorDescription) => console.error('Renderer load failed:', errorCode, sanitizeRuntimeMessage(errorDescription)));
   const denyUnexpectedNavigation = (event: Electron.Event, url: string) => {
     if (!isAllowedRendererUrl(url, applicationUrl)) event.preventDefault();
   };
@@ -134,4 +140,8 @@ function createWindow(): BrowserWindow {
   if (process.env.ELECTRON_RENDERER_URL) void window.loadURL(applicationUrl);
   else void window.loadFile(rendererPath);
   return window;
+}
+
+function sanitizeRuntimeMessage(message: string): string {
+  return message.replace(/(password|cookie|token|access_token|secret)[^\s]*/gi, '$1 [redacted]').slice(0, 500);
 }

@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { backupDatabaseSync, createAppPaths, openDatabase } from './database';
+import { backupDatabaseSync, createAppPaths, openDatabase, shouldBackupBeforeMigrations } from './database';
+import { LATEST_SCHEMA_VERSION } from './migrations';
 import { AccountRepository } from './repositories/AccountRepository';
 import { GroupRepository } from './repositories/GroupRepository';
 import { DraftRepository } from './repositories/DraftRepository';
@@ -17,6 +18,11 @@ function withDatabase(run: (db: ReturnType<typeof openDatabase>) => void): void 
 }
 
 describe('workspace persistence', () => {
+  it('derives backup behavior from the latest migration version', () => {
+    expect(shouldBackupBeforeMigrations(LATEST_SCHEMA_VERSION, LATEST_SCHEMA_VERSION + 1)).toBe(true);
+    expect(shouldBackupBeforeMigrations(LATEST_SCHEMA_VERSION, LATEST_SCHEMA_VERSION)).toBe(false);
+  });
+
   it('creates a SQLite-safe retained backup', () => withDatabase((db) => {
     const backupRoot = join(tmpdir(), 'fb-backups-' + randomUUID());
     const path = backupDatabaseSync(db, backupRoot, new Date('2026-01-01T01:02:03.000Z'));

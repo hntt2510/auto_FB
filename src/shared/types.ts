@@ -153,6 +153,7 @@ export type LogApi = {
 };
 
 export type WindowApi = { accountApi: AccountApi; logApi: LogApi; groupApi: GroupApi; draftApi: DraftApi; queueApi: QueueApi; dashboardApi: DashboardApi; publishApi: PublishApi; settingsApi: PublishingSettingsApi };
+export type AppBridge = { available: true; version: string };
 
 export type FacebookGroup = {
   id: string;

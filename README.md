@@ -128,3 +128,8 @@ last five snapshots, and live under the ignored backups/ directory.
 Live Facebook validation was not performed for this release candidate. The
 next step is a controlled one-account, one-group, one-post canary with manual
 authentication and operator review.
+
+Development runtime note: npm run dev opens the supported Electron desktop
+window. The Vite localhost URL is only the renderer development server; do
+not open http://localhost:5173 directly in Chrome because a normal browser
+has no Electron preload bridge or privileged IPC.

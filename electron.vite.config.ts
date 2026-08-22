@@ -9,6 +9,11 @@ export default defineConfig({
   },
   preload: {
     plugins: [externalizeDepsPlugin()],
+    build: {
+      rollupOptions: {
+        output: { format: 'cjs' }
+      }
+    },
     resolve: { alias: { '@shared': resolve('src/shared') } }
   },
   renderer: {

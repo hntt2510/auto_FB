@@ -27,6 +27,7 @@ export class QueueService {
     const parsed = queueBatchSchema.safeParse(input); if (!parsed.success) throw new AppError('INVALID_REQUEST', parsed.error.issues[0]?.message ?? 'Invalid queue batch.');
     const draft = this.requireDraft(parsed.data.draftId); const issues: QueueValidationIssue[] = []; const targets: QueuePreview['targets'] = []; const seen = new Set<string>(); const duplicateTargets: QueueTarget[] = [];
     if (draft.status !== 'READY') issues.push({ code: 'DRAFT_NOT_READY', message: 'Draft must be READY before it can be queued.' });
+    if (!draft.body.trim() && !draft.linkUrl?.trim() && draft.media.length === 0) issues.push({ code: 'EMPTY_PUBLISH_CONTENT', message: 'Queue content must include body text, a link, or media.' });
     const hash = buildSnapshotHash(draft);
     for (const target of parsed.data.targets) {
       const key = `${target.accountId}:${target.groupId}`;

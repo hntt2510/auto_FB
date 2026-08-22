@@ -96,6 +96,7 @@ export type ApiErrorCode =
   | 'LIVE_READINESS_FAILED'
   | 'PREFLIGHT_REQUIRED'
   | 'PREFLIGHT_EXPIRED'
+  | 'EMPTY_PUBLISH_CONTENT'
   | 'SCHEDULER_DISARMED'
   | 'OVERDUE_BACKLOG_ACK_REQUIRED'
   | 'PUBLISHING_STOPPED'
@@ -190,7 +191,7 @@ export type PublishAttemptStatus = 'STARTING' | 'COMPOSER_OPENED' | 'CONTENT_FIL
 export type PublishReceiptResult = 'SUBMITTED' | 'SUBMITTED_PENDING_APPROVAL' | 'VERIFIED_PUBLISHED' | 'UNKNOWN';
 export type ExecutionMode = 'DRY_RUN' | 'LIVE';
 export type SelectorProbeStatus = 'FOUND' | 'MISSING' | 'AMBIGUOUS' | 'NOT_TESTED';
-export type SelectorProbeField = { status: SelectorProbeStatus; count?: number; reason?: string };
+export type SelectorProbeField = { status: SelectorProbeStatus; count?: number; enabled?: boolean; reason?: string };
 export type SelectorProbeResult = { id?: string; accountId: string; groupId: string; selectorVersion: string; status: SelectorProbeStatus; session: SelectorProbeField; group: SelectorProbeField; composerTrigger: SelectorProbeField; composerTextbox: SelectorProbeField; mediaInput: SelectorProbeField; postButton: SelectorProbeField; uploadBusy: SelectorProbeField; approvalSignal: SelectorProbeField; acceptanceSignal: SelectorProbeField; checkedAt: string; warnings: string[] };
 export type PreflightResult = SelectorProbeResult & { queueItemId: string; snapshotHash?: string; accountReady: boolean; groupOpened: boolean; composerFound: boolean; textboxFound: boolean; mediaInputFound?: boolean; mediaRequired?: boolean; mediaValidated?: boolean; postButtonFound: boolean; passed: boolean; filledContent: boolean };
 export type ReconciliationAction = 'MARK_SUBMITTED' | 'MARK_VERIFIED';

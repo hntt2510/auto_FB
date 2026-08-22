@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Locator } from 'playwright';
-import { FacebookComposerAdapter, candidateContentMatches, correlateNewPostUrl, normalizePostCandidateUrl } from './FacebookComposerAdapter';
+import { FacebookComposerAdapter, candidateContentMatches, correlateNewPostUrl, hasPublishableContent, normalizePostCandidateUrl, probePostButton } from './FacebookComposerAdapter';
 
 describe('FacebookComposerAdapter content handling', () => {
   it('preserves Unicode and appends a missing link once', async () => {
@@ -35,5 +35,23 @@ describe('FacebookComposerAdapter content handling', () => {
     expect(candidateContentMatches('Completely unrelated content', 'A post about a very specific launch announcement')).toBe(false);
     expect(candidateContentMatches('A post about a very specific launch announcement with more text', 'A post about a very specific launch announcement')).toBe(true);
     expect(candidateContentMatches('', 'A post')).toBe(false);
+  });
+
+  it('rejects an empty publish snapshot', () => {
+    expect(hasPublishableContent({ body: '', linkUrl: undefined, media: [] })).toBe(false);
+    expect(hasPublishableContent({ body: 'Body', linkUrl: undefined, media: [] })).toBe(true);
+    expect(hasPublishableContent({ body: '', linkUrl: undefined, media: [{ id: 'media' }] as never })).toBe(true);
+  });
+
+  it('waits for Post to enable after content fill without clicking it', async () => {
+    let enabled = false; const click = vi.fn(); const button = { isVisible: vi.fn(async () => true), isEnabled: vi.fn(async () => enabled), click } as unknown as Locator;
+    const fill = vi.fn(async () => { enabled = true; }); await fill();
+    await expect(probePostButton([button], true)).resolves.toMatchObject({ status: 'FOUND', enabled: true }); expect(click).not.toHaveBeenCalled();
+  });
+
+  it('reports disabled and ambiguous Post buttons safely', async () => {
+    const disabled = { isVisible: vi.fn(async () => true), isEnabled: vi.fn(async () => false) } as unknown as Locator;
+    await expect(probePostButton([disabled], true, 100)).resolves.toMatchObject({ status: 'MISSING', enabled: false, reason: expect.stringContaining('remained disabled') });
+    await expect(probePostButton([disabled, disabled], true)).resolves.toMatchObject({ status: 'AMBIGUOUS', count: 2 });
   });
 });

@@ -88,6 +88,7 @@ export type ApiErrorCode =
   | 'COMPOSER_TRIGGER_CLICK_FAILED'
   | 'COMPOSER_TRIGGER_CLICK_NO_COMPOSER'
   | 'COMPOSER_CONTAINER_NOT_FOUND'
+  | 'COMPOSER_CONTAINER_AMBIGUOUS'
   | 'COMPOSER_TEXTBOX_NOT_FOUND'
   | 'COMPOSER_TEXTBOX_AMBIGUOUS'
   | 'CONTENT_FILL_FAILED'
@@ -201,8 +202,9 @@ export type SelectorProbeStatus = 'FOUND' | 'MISSING' | 'AMBIGUOUS' | 'NOT_TESTE
 export type ComposerEditorType = 'CONTENTEDITABLE' | 'TEXTAREA' | 'INPUT' | 'UNKNOWN';
 export type ComposerEntryMethod = 'FILL' | 'KEYBOARD_INSERT';
 export type TriggerCandidateSummary = { strategy?: string; role?: string; tag?: string; ariaLabel?: string; title?: string; text?: string };
+export type TextboxCandidateSummary = { strategy?: string; tag?: string; role?: string; contenteditable?: string; ariaLabel?: string; placeholder?: string; ariaMultiline?: string; lexicalEditor?: string; visible?: boolean };
 export type SelectorProbeField = { status: SelectorProbeStatus; count?: number; enabled?: boolean; reason?: string };
-export type SelectorProbeResult = { id?: string; accountId: string; groupId: string; selectorVersion: string; status: SelectorProbeStatus; session: SelectorProbeField; group: SelectorProbeField; composerTrigger: SelectorProbeField; composerTextbox: SelectorProbeField; mediaInput: SelectorProbeField; postButton: SelectorProbeField; uploadBusy: SelectorProbeField; approvalSignal: SelectorProbeField; acceptanceSignal: SelectorProbeField; checkedAt: string; warnings: string[]; reason?: string; editorType?: ComposerEditorType; contentObserved?: boolean; observedContentLength?: number; expectedContentLength?: number; entryMethod?: ComposerEntryMethod; diagnosticPath?: string; triggerStrategy?: string; triggerCandidates?: TriggerCandidateSummary[] };
+export type SelectorProbeResult = { id?: string; accountId: string; groupId: string; selectorVersion: string; status: SelectorProbeStatus; session: SelectorProbeField; group: SelectorProbeField; composerTrigger: SelectorProbeField; composerTextbox: SelectorProbeField; mediaInput: SelectorProbeField; postButton: SelectorProbeField; uploadBusy: SelectorProbeField; approvalSignal: SelectorProbeField; acceptanceSignal: SelectorProbeField; checkedAt: string; warnings: string[]; reason?: string; editorType?: ComposerEditorType; contentObserved?: boolean; observedContentLength?: number; expectedContentLength?: number; entryMethod?: ComposerEntryMethod; diagnosticPath?: string; triggerStrategy?: string; triggerCandidates?: TriggerCandidateSummary[]; textboxStrategy?: string; textboxCandidates?: TextboxCandidateSummary[] };
 export type PreflightResult = SelectorProbeResult & { queueItemId: string; snapshotHash?: string; accountReady: boolean; groupOpened: boolean; composerFound: boolean; textboxFound: boolean; mediaInputFound?: boolean; mediaRequired?: boolean; mediaValidated?: boolean; postButtonFound: boolean; passed: boolean; filledContent: boolean };
 export type ReconciliationAction = 'MARK_SUBMITTED' | 'MARK_VERIFIED';
 export type ReconciliationRecord = { id: string; queueItemId: string; attemptId?: string; action: ReconciliationAction; evidence: string; createdAt: string };

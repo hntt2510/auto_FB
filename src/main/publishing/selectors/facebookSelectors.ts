@@ -1,4 +1,4 @@
-export const FACEBOOK_SELECTORS_VERSION = '2026-08-v2';
+export const FACEBOOK_SELECTORS_VERSION = '2026-08-v3';
 
 export const facebookText = {
   composerTrigger: /write something|create post|what(?:'|\u2019)s on your mind|create a public post|vi\u1ebft g\u00ec \u0111\u00f3|vi\u1ebft g\u00ec \u0111i|b\u1ea1n \u0111ang ngh\u0129 g\u00ec|b\u1ea1n vi\u1ebft g\u00ec \u0111i|b\u1ea1n mu\u1ed1n chia s\u1ebb g\u00ec|chia s\u1ebb g\u00ec \u0111\u00f3|t\u1ea1o b\u00e0i vi\u1ebft|t\u1ea1o b\u00e0i vi\u1ebft c\u00f4ng khai/i,

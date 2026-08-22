@@ -7,7 +7,7 @@ import { FACEBOOK_SELECTORS_VERSION, facebookText } from './selectors/facebookSe
 type FakeState = { text: string; fillCount: number; insertCount: number; fillEnables: boolean; fillUpdates: boolean; fallbackEnables: boolean; fallbackUpdates: boolean; enabled: boolean };
 type TriggerDescriptor = { role: string; tag: string; ariaLabel?: string; title?: string; text?: string };
 
-function fakeComposer(state: FakeState, descriptor: TriggerDescriptor = { role: 'button', tag: 'DIV', ariaLabel: 'Bạn viết gì đi...', text: 'Bạn viết gì đi...' }): { page: Page; textbox: Locator; container: Locator; post: Locator } {
+function fakeComposer(state: FakeState, descriptor: TriggerDescriptor = { role: 'button', tag: 'DIV', ariaLabel: 'Bạn viết gì đi...', text: 'Bạn viết gì đi...' }, hydrationCycles = 0): { page: Page; textbox: Locator; container: Locator; post: Locator } {
   const post = {
     count: vi.fn(async () => 1),
     nth: vi.fn(() => post),
@@ -19,12 +19,13 @@ function fakeComposer(state: FakeState, descriptor: TriggerDescriptor = { role: 
   const trigger = { count: vi.fn(async () => 1), nth: vi.fn(() => trigger), isVisible: vi.fn(async () => true), click: vi.fn(async () => undefined), getAttribute: vi.fn(async (name: string) => name === 'role' ? descriptor.role : name === 'aria-label' ? descriptor.ariaLabel ?? '' : name === 'title' ? descriptor.title ?? '' : ''), evaluate: vi.fn(async () => descriptor.tag), innerText: vi.fn(async () => descriptor.text ?? ''), textContent: vi.fn(async () => descriptor.text ?? '') } as unknown as Locator;
   const mainScope = { count: vi.fn(async () => 1), nth: vi.fn(() => mainScope), isVisible: vi.fn(async () => true), locator: vi.fn((selector: string) => selector === 'button, [role="button"], [tabindex="0"]' || selector === 'button' || selector === '[role="button"]' || selector === '[tabindex="0"]' ? trigger : empty) } as unknown as Locator;
   const page = { getByRole: vi.fn(() => trigger), locator: vi.fn((selector: string) => selector === 'main' || selector === '[role="main"]' ? mainScope : selector === 'body' ? mainScope : ({ filter: vi.fn(() => empty), count: vi.fn(async () => 0), nth: vi.fn(() => empty), isVisible: vi.fn(async () => false) })), keyboard: { insertText: vi.fn(async (value: string) => { state.insertCount += 1; if (state.fallbackUpdates) state.text = value; state.enabled = state.fallbackEnables; }), press: vi.fn(async () => undefined) } } as unknown as Page;
+  let hydrationReads = 0;
   const textbox = {
     count: vi.fn(async () => 1),
     nth: vi.fn(() => textbox),
     isVisible: vi.fn(async () => true),
     fill: vi.fn(async (value: string) => { state.fillCount += 1; if (state.fillUpdates) state.text = value; state.enabled = state.fillEnables; }),
-    getAttribute: vi.fn(async (name: string) => name === 'contenteditable' ? 'true' : null),
+    getAttribute: vi.fn(async (name: string) => name === 'contenteditable' ? 'true' : name === 'role' ? 'textbox' : name === 'aria-multiline' ? 'true' : name === 'data-lexical-editor' ? 'true' : null),
     evaluate: vi.fn(async () => 'DIV'),
     innerText: vi.fn(async () => state.text),
     textContent: vi.fn(async () => state.text),
@@ -33,8 +34,8 @@ function fakeComposer(state: FakeState, descriptor: TriggerDescriptor = { role: 
     page: vi.fn(() => page)
   } as unknown as Locator;
   const container = {
-    getByRole: vi.fn((role: string, options?: { name?: unknown }) => role === 'textbox' ? textbox : String(options?.name ?? '').toLowerCase().includes('post') ? post : empty),
-    locator: vi.fn((selector: string) => selector.includes('input[type="file"]') ? empty : selector.includes('contenteditable') ? textbox : { filter: vi.fn(() => empty) }),
+    getByRole: vi.fn((role: string, options?: { name?: unknown }) => role === 'textbox' && options?.name === undefined ? textbox : String(options?.name ?? '').toLowerCase().includes('post') ? post : empty),
+    locator: vi.fn((selector: string) => selector.includes('input[type="file"]') ? empty : selector.includes('contenteditable') ? (++hydrationReads > hydrationCycles ? textbox : empty) : { filter: vi.fn(() => empty) }),
     getByText: vi.fn(() => empty),
     isVisible: vi.fn(async () => true)
   } as unknown as Locator;
@@ -50,6 +51,17 @@ function resolverPage(descriptors: TriggerDescriptor[]): Page {
   const collection = { count: vi.fn(async () => locators.length), nth: vi.fn((index: number) => locators[index]) } as unknown as Locator;
   const scope = { count: vi.fn(async () => 1), nth: vi.fn(() => scope), isVisible: vi.fn(async () => true), locator: vi.fn(() => collection) } as unknown as Locator;
   return { locator: vi.fn((selector: string) => selector === 'main' || selector === '[role="main"]' || selector === 'body' ? scope : collection) } as unknown as Page;
+}
+
+type TextboxDescriptor = { tag: string; role?: string; contenteditable?: string; ariaLabel?: string; placeholder?: string; ariaMultiline?: string; lexicalEditor?: string; type?: string };
+function textboxScope(descriptors: TextboxDescriptor[]): Locator {
+  const locators = descriptors.map((descriptor) => ({
+    count: vi.fn(async () => 1), nth: vi.fn(() => locators[descriptors.indexOf(descriptor)]), isVisible: vi.fn(async () => true),
+    getAttribute: vi.fn(async (name: string) => ({ role: descriptor.role, contenteditable: descriptor.contenteditable, 'aria-label': descriptor.ariaLabel, placeholder: descriptor.placeholder, 'aria-multiline': descriptor.ariaMultiline, 'data-lexical-editor': descriptor.lexicalEditor, type: descriptor.type }[name] ?? '')),
+    evaluate: vi.fn(async () => descriptor.tag)
+  } as unknown as Locator));
+  const collection = { count: vi.fn(async () => locators.length), nth: vi.fn((index: number) => locators[index]) } as unknown as Locator;
+  return { locator: vi.fn(() => collection) } as unknown as Locator;
 }
 
 function queueItem(body: string, linkUrl?: string): QueueRecord {
@@ -80,7 +92,7 @@ function actualAdapterFor(fake: ReturnType<typeof fakeComposer>): FacebookCompos
 
 describe('FacebookComposerAdapter content handling', () => {
   it('uses the versioned selector set', () => {
-    expect(FACEBOOK_SELECTORS_VERSION).toBe('2026-08-v2');
+    expect(FACEBOOK_SELECTORS_VERSION).toBe('2026-08-v3');
   });
 
   it('resolves the live Vietnamese trigger variant through the central resolver', async () => {
@@ -108,6 +120,26 @@ describe('FacebookComposerAdapter content handling', () => {
     expect(result).toMatchObject({ status: 'MISSING', count: 0 });
   });
 
+  it('resolves Lexical and unnamed role=textbox editors centrally', async () => {
+    const adapter = new FacebookComposerAdapter();
+    await expect(adapter.findComposerTextbox(textboxScope([{ tag: 'DIV', role: 'textbox', contenteditable: 'true', ariaMultiline: 'true', lexicalEditor: 'true' }]))).resolves.toMatchObject({ status: 'FOUND', strategy: 'LEXICAL_EDITOR', count: 1 });
+    await expect(adapter.findComposerTextbox(textboxScope([{ tag: 'DIV', role: 'textbox', contenteditable: 'true' }]))).resolves.toMatchObject({ status: 'FOUND', strategy: 'ROLE_TEXTBOX', count: 1 });
+  });
+
+  it('preserves named textbox priority and excludes utility search fields', async () => {
+    const adapter = new FacebookComposerAdapter();
+    await expect(adapter.findComposerTextbox(textboxScope([{ tag: 'DIV', role: 'textbox', contenteditable: 'true', ariaLabel: "What's on your mind" }]))).resolves.toMatchObject({ status: 'FOUND', strategy: 'NAMED_ROLE' });
+    const utility = await adapter.findComposerTextbox(textboxScope([{ tag: 'INPUT', role: 'searchbox', type: 'search', placeholder: 'Search' }]));
+    expect(utility).toMatchObject({ status: 'MISSING', count: 0 });
+    expect(utility.safeCandidates[0]).toMatchObject({ role: 'searchbox', visible: true });
+  });
+
+  it('rejects ambiguous valid editors without selecting the first', async () => {
+    const adapter = new FacebookComposerAdapter();
+    const result = await adapter.findComposerTextbox(textboxScope([{ tag: 'DIV', role: 'textbox', contenteditable: 'true' }, { tag: 'DIV', role: 'textbox', contenteditable: 'true' }]));
+    expect(result).toMatchObject({ status: 'AMBIGUOUS', count: 2 });
+  });
+
   it('runs preflight through one resolved trigger, composer, textbox, and content path', async () => {
     const state: FakeState = { text: '', fillCount: 0, insertCount: 0, fillEnables: true, fillUpdates: true, fallbackEnables: true, fallbackUpdates: true, enabled: false };
     const fake = fakeComposer(state); const adapter = actualAdapterFor(fake);
@@ -117,6 +149,27 @@ describe('FacebookComposerAdapter content handling', () => {
     expect(result.probe.contentObserved).toBe(true);
     expect(state.fillCount).toBe(1);
     expect(fake.post.click).not.toHaveBeenCalled();
+  });
+
+  it('waits through dialog hydration before resolving the editor', async () => {
+    const state: FakeState = { text: '', fillCount: 0, insertCount: 0, fillEnables: true, fillUpdates: true, fallbackEnables: true, fallbackUpdates: true, enabled: false };
+    const fake = fakeComposer(state, undefined, 18); const adapter = actualAdapterFor(fake);
+    const result = await adapter.preflight(fake.page, queueItem('Hydration race'), true);
+    expect(result.probe.status).toBe('FOUND');
+    expect(result.probe.textboxStrategy).toBe('LEXICAL_EDITOR');
+    expect(result.probe.reason).toBeUndefined();
+    expect(fake.post.click).not.toHaveBeenCalled();
+  });
+
+  it('times out safely when no editor hydrates and retains bounded candidate diagnostics', async () => {
+    const state: FakeState = { text: '', fillCount: 0, insertCount: 0, fillEnables: true, fillUpdates: true, fallbackEnables: true, fallbackUpdates: true, enabled: false };
+    const fake = fakeComposer(state, undefined, 1000); const utility = textboxScope([{ tag: 'INPUT', role: 'searchbox', type: 'search', placeholder: 'Search people' }]);
+    fake.container.locator = vi.fn((selector: string) => selector.includes('contenteditable') ? utility.locator('[role="textbox"]') : { filter: vi.fn(() => ({ count: vi.fn(async () => 0), nth: vi.fn(), isVisible: vi.fn(async () => false) })) }) as unknown as typeof fake.container.locator;
+    const adapter = actualAdapterFor(fake);
+    await fake.page.getByRole('button').click();
+    const ready = await (adapter as unknown as { waitForComposerReady: (page: Page, timeoutMs: number) => Promise<{ status: string; reason: string; safeCandidates: unknown[] }> }).waitForComposerReady(fake.page, 1000);
+    expect(ready).toMatchObject({ status: 'MISSING', reason: 'COMPOSER_TEXTBOX_NOT_FOUND' });
+    expect(ready.safeCandidates.length).toBeGreaterThan(0);
   });
 
   it('captures early diagnostics when the trigger is missing', async () => {

@@ -1,5 +1,8 @@
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { hasValidSignature } from './MediaStorageService';
+import { hasValidSignature, MediaStorageService } from './MediaStorageService';
 
 describe('managed media signatures', () => {
   it('accepts matching image/video signatures', () => {
@@ -12,5 +15,11 @@ describe('managed media signatures', () => {
   it('rejects mismatched signatures', () => {
     expect(hasValidSignature('IMAGE', '.png', Uint8Array.from([0xff, 0xd8, 0xff]))).toBe(false);
     expect(hasValidSignature('VIDEO', '.mp4', Uint8Array.from([0x1a, 0x45, 0xdf, 0xa3]))).toBe(false);
+  });
+
+  it('rejects a managed media root that redirects through a symlink or junction', () => {
+    const root = mkdtempSync(join(tmpdir(), 'media-root-')); const target = join(root, 'outside'); const link = join(root, 'media'); mkdirSync(target);
+    try { symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir'); expect(() => new MediaStorageService(link)).toThrow(/root|redirect/i); }
+    finally { rmSync(root, { recursive: true, force: true }); }
   });
 });

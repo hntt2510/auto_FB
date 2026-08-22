@@ -76,6 +76,22 @@ export type ApiErrorCode =
   | 'INVALID_ASSIGNMENT'
   | 'ENTITY_IN_USE'
   | 'INVALID_STATE'
+  | 'PUBLISH_CLAIM_CONFLICT'
+  | 'PUBLISH_ENGINE_DISABLED'
+  | 'ACCOUNT_LOGIN_REQUIRED'
+  | 'ACCOUNT_CHECKPOINT'
+  | 'GROUP_UNAVAILABLE'
+  | 'GROUP_PERMISSION_DENIED'
+  | 'COMPOSER_NOT_FOUND'
+  | 'CONTENT_FILL_FAILED'
+  | 'MEDIA_FILE_MISSING'
+  | 'MEDIA_UPLOAD_FAILED'
+  | 'MEDIA_UPLOAD_TIMEOUT'
+  | 'SUBMIT_FAILED'
+  | 'SUBMISSION_UNKNOWN'
+  | 'NETWORK_ERROR'
+  | 'BROWSER_CLOSED'
+  | 'EXECUTION_CANCELLED'
   | 'UNKNOWN_ERROR';
 
 export type ApiError = { code: ApiErrorCode; message: string };
@@ -129,7 +145,7 @@ export type LogApi = {
   list: (filter?: LogFilter) => Promise<AuditLog[]>;
 };
 
-export type WindowApi = { accountApi: AccountApi; logApi: LogApi; groupApi: GroupApi; draftApi: DraftApi; queueApi: QueueApi; dashboardApi: DashboardApi };
+export type WindowApi = { accountApi: AccountApi; logApi: LogApi; groupApi: GroupApi; draftApi: DraftApi; queueApi: QueueApi; dashboardApi: DashboardApi; publishApi: PublishApi; settingsApi: PublishingSettingsApi };
 
 export type FacebookGroup = {
   id: string;
@@ -161,7 +177,13 @@ export type MediaType = 'IMAGE' | 'VIDEO';
 export type DraftMedia = { id: string; draftId: string; type: MediaType; originalName: string; mimeType?: string; fileSize: number; sortOrder: number; previewUrl: string; createdAt: string };
 export type MediaReorderInput = { draftId: string; mediaIds: string[] };
 
-export type QueueStatus = 'PENDING' | 'PAUSED' | 'CANCELLED';
+export type QueueStatus = 'PENDING' | 'PAUSED' | 'RUNNING' | 'SUBMITTED' | 'SUCCEEDED' | 'FAILED' | 'NEEDS_ATTENTION' | 'CANCELLED';
+export type PublishAttemptStatus = 'STARTING' | 'COMPOSER_OPENED' | 'CONTENT_FILLED' | 'MEDIA_UPLOADED' | 'SUBMITTING' | 'SUBMITTED' | 'SUCCEEDED' | 'FAILED' | 'NEEDS_ATTENTION';
+export type PublishReceiptResult = 'SUBMITTED' | 'SUBMITTED_PENDING_APPROVAL' | 'VERIFIED_PUBLISHED' | 'UNKNOWN';
+export type PublishAttemptEvent = { id: string; attemptId: string; sequence: number; eventType: string; message?: string; createdAt: string };
+export type PublishReceipt = { id: string; queueItemId: string; attemptId: string; result: PublishReceiptResult; groupUrl: string; postUrl?: string; evidence?: string; submittedAt: string; createdAt: string };
+export type PublishAttempt = { id: string; queueItemId: string; accountId?: string; groupId?: string; attemptNumber: number; status: PublishAttemptStatus; errorCode?: string; errorMessage?: string; diagnosticAvailable: boolean; startedAt: string; finishedAt?: string; createdAt: string; events: PublishAttemptEvent[]; receipt?: PublishReceipt; irreversibleReached: boolean };
+export type PublishAttemptSummary = Pick<PublishAttempt, 'id' | 'queueItemId' | 'accountId' | 'groupId' | 'attemptNumber' | 'status' | 'errorCode' | 'errorMessage' | 'startedAt' | 'finishedAt' | 'irreversibleReached'> & { result?: PublishReceiptResult };
 export type QueueTarget = { accountId: string; groupId: string };
 export type QueueItem = {
   id: string;
@@ -176,6 +198,10 @@ export type QueueItem = {
   groupUrl: string;
   status: QueueStatus;
   scheduledAt?: string;
+  attentionReason?: string;
+  submittedAt?: string;
+  completedAt?: string;
+  latestAttempt?: PublishAttemptSummary;
   media: Array<Pick<DraftMedia, 'id' | 'type' | 'originalName' | 'mimeType' | 'fileSize' | 'sortOrder' | 'previewUrl'>>;
   createdAt: string;
   updatedAt: string;
@@ -192,6 +218,7 @@ export type DashboardSummary = {
   groups: { active: number; total: number };
   drafts: { ready: number; total: number };
   queue: { active: number; due: number; cancelled: number };
+  publishing: { enabled: boolean; running: number; succeededToday: number; failedToday: number; needsAttention: number };
   recentQueue: QueueItem[];
   recentLogs: AuditLog[];
 };
@@ -239,4 +266,25 @@ export type QueueApi = {
 
 export type DashboardApi = { summary: () => Promise<DashboardSummary> };
 
-export type WorkspaceApi = { groupApi: GroupApi; draftApi: DraftApi; queueApi: QueueApi; dashboardApi: DashboardApi };
+export type PublishingSettings = { enabled: boolean; schedulerIntervalSeconds: number; maxConcurrentAccounts: number; videoUploadTimeoutSeconds: number };
+export type PublishingBlock = { accountId: string; accountName: string; reason: 'LOGIN_REQUIRED' | 'CHECKPOINT'; message: string; blockedAt: string };
+export type PublishingRunResult = { requested: number; claimed: number; completed: number; skipped: number };
+export type PublishingEngineStatus = { settings: PublishingSettings; schedulerRunning: boolean; tickRunning: boolean; running: QueueItem[]; blockedAccounts: PublishingBlock[]; recentAttempts: PublishAttemptSummary[]; dueCount: number };
+export type RequeueInput = { queueId: string; scheduledAt?: string };
+
+export type PublishApi = {
+  status: () => Promise<PublishingEngineStatus>;
+  run: (queueId: string) => Promise<PublishingRunResult>;
+  runSelected: (queueIds: string[]) => Promise<PublishingRunResult>;
+  runDue: () => Promise<PublishingRunResult>;
+  attempts: (queueId: string) => Promise<PublishAttempt[]>;
+  retry: (queueId: string, acknowledgeDuplicateRisk: boolean) => Promise<QueueItem>;
+  requeue: (input: RequeueInput) => Promise<QueueItem>;
+  resolve: (queueId: string) => Promise<QueueItem>;
+  openDiagnostic: (attemptId: string) => Promise<void>;
+  onChanged: (listener: () => void) => () => void;
+};
+
+export type PublishingSettingsApi = { getPublishing: () => Promise<PublishingSettings>; updatePublishing: (input: PublishingSettings) => Promise<PublishingSettings> };
+
+export type WorkspaceApi = { groupApi: GroupApi; draftApi: DraftApi; queueApi: QueueApi; dashboardApi: DashboardApi; publishApi: PublishApi; settingsApi: PublishingSettingsApi };

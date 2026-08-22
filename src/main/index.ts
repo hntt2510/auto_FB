@@ -21,11 +21,24 @@ import { DraftService } from './services/DraftService';
 import { QueueService } from './services/QueueService';
 import { DashboardService } from './services/DashboardService';
 import { registerWorkspaceIpc } from './ipc/workspace.ipc';
+import { PublishRepository } from './db/repositories/PublishRepository';
+import { FacebookComposerAdapter } from './publishing/FacebookComposerAdapter';
+import { FacebookPublisher } from './publishing/FacebookPublisher';
+import { PublishDiagnostics } from './publishing/PublishDiagnostics';
+import { PublishExecutor } from './publishing/PublishExecutor';
+import { PublishCoordinator } from './publishing/PublishCoordinator';
+import { PublishScheduler } from './publishing/PublishScheduler';
+import { PublishingSettingsService } from './publishing/PublishingSettingsService';
+import { PublishingService } from './publishing/PublishingService';
+import { broadcastPublishingChanged } from './ipc/publishing.ipc';
 
 let service: AccountService | undefined;
 let cleanupIpc: (() => void) | undefined;
 let quitting = false;
 let database: Database.Database | undefined;
+let scheduler: PublishScheduler | undefined;
+let coordinator: PublishCoordinator | undefined;
+let publishing: PublishingService | undefined;
 
 registerMediaScheme();
 
@@ -46,6 +59,8 @@ if (!gotLock) {
     const drafts = new DraftRepository(database);
     const queue = new QueueRepository(database);
     const media = new MediaStorageService(paths.media);
+    const publishRepository = new PublishRepository(database);
+    const diagnostics = new PublishDiagnostics(paths.diagnostics);
     service = new AccountService(accounts, audit, profiles, new SecretStore(settings, {
       isEncryptionAvailable: () => safeStorage.isEncryptionAvailable(),
       encryptString: (value) => safeStorage.encryptString(value),
@@ -54,12 +69,20 @@ if (!gotLock) {
     createWindow();
     cleanupIpc = registerIpc(service, () => new Set(BrowserWindow.getAllWindows().map((current) => current.webContents.id)));
     registerMediaProtocol(drafts, media);
-    const workspaceNotify = () => { /* workspace pages refetch after mutations */ };
+    const workspaceNotify = () => { broadcastPublishingChanged(); };
+    const executor = new PublishExecutor(queue, publishRepository, accounts, groups, profiles, service.browser, new FacebookPublisher(new FacebookComposerAdapter(), media), diagnostics, audit, workspaceNotify);
+    coordinator = new PublishCoordinator(queue, executor);
+    const publishingSettings = new PublishingSettingsService(settings, audit, () => { scheduler?.reconfigure(); workspaceNotify(); });
+    scheduler = new PublishScheduler(queue, coordinator, publishingSettings, workspaceNotify);
+    publishing = new PublishingService(queue, publishRepository, accounts, groups, media, coordinator, scheduler, publishingSettings, diagnostics, audit, workspaceNotify);
+    publishing.recover(); service.setHealthObserver((result) => publishing?.handleHealthResult(result)); scheduler.start();
     cleanupIpc = chainCleanup(cleanupIpc, registerWorkspaceIpc({
       groups: new GroupService(groups, accounts, queue, service.browser, audit, workspaceNotify),
       drafts: new DraftService(drafts, queue, media, audit, workspaceNotify),
       queue: new QueueService(queue, drafts, accounts, groups, media, audit, workspaceNotify),
-      dashboard: new DashboardService(database)
+      dashboard: new DashboardService(database, publishingSettings),
+      publishing,
+      settings: publishingSettings
     }, () => new Set(BrowserWindow.getAllWindows().map((current) => current.webContents.id))));
     app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
   }).catch((error) => {
@@ -71,7 +94,12 @@ if (!gotLock) {
     if (quitting || !service) return;
     event.preventDefault();
     quitting = true;
-    void service.browser.closeAll().finally(() => { cleanupIpc?.(); database?.close(); app.quit(); });
+    scheduler?.stop();
+    void (async () => {
+      const drained = await coordinator?.stopAndDrain(20000) ?? true;
+      if (!drained) { await service!.browser.abortRunningContexts(); await coordinator?.stopAndDrain(5000); publishing?.recover(); }
+      await service!.browser.closeAll();
+    })().finally(() => { cleanupIpc?.(); database?.close(); app.quit(); });
   });
   app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 }

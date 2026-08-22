@@ -4,14 +4,17 @@ import type { DashboardSummary } from '@shared/types';
 export function DashboardPage() {
   const [summary, setSummary] = useState<DashboardSummary>();
   const [error, setError] = useState('');
-  useEffect(() => { void window.dashboardApi.summary().then(setSummary).catch((e: unknown) => setError(e instanceof Error ? e.message : 'Unable to load dashboard.')); }, []);
+  useEffect(() => { const load = () => window.dashboardApi.summary().then(setSummary).catch((e: unknown) => setError(e instanceof Error ? e.message : 'Unable to load dashboard.')); void load(); const unsubscribe = window.publishApi.onChanged(load); const timer = window.setInterval(load, 10000); return () => { unsubscribe(); window.clearInterval(timer); }; }, []);
   if (error) return <main className="content"><div className="page-heading"><div><h2>Dashboard</h2><p>Workspace overview.</p></div></div><div className="notice error">{error}</div></main>;
   if (!summary) return <main className="content"><div className="empty-state">Loading dashboard…</div></main>;
   const cards = [
     ['Accounts', `${summary.accounts.total}`, `${summary.accounts.ready} ready · ${summary.accounts.loginRequired} need login`],
     ['Active groups', `${summary.groups.active}`, `${summary.groups.total} total`],
     ['Ready drafts', `${summary.drafts.ready}`, `${summary.drafts.total} total`],
-    ['Queue', `${summary.queue.active}`, `${summary.queue.due} due · ${summary.queue.cancelled} cancelled`]
+    ['Queue', `${summary.queue.active}`, `${summary.queue.due} due · ${summary.queue.cancelled} cancelled`],
+    ['Publishing engine', summary.publishing.enabled ? 'ON' : 'OFF', `${summary.publishing.running} running`],
+    ['Needs attention', `${summary.publishing.needsAttention}`, `${summary.publishing.failedToday} failed today`],
+    ['Succeeded today', `${summary.publishing.succeededToday}`, 'verified publications only']
   ];
   return <main className="content"><div className="page-heading"><div><h2>Dashboard</h2><p>Health, content readiness, and queue activity at a glance.</p></div><button className="secondary" onClick={() => window.location.reload()}>Refresh</button></div>
     <div className="stat-grid">{cards.map(([label, value, detail]) => <div className="stat-card" key={label}><small>{label}</small><strong>{value}</strong><span>{detail}</span></div>)}</div>

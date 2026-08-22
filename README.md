@@ -62,10 +62,20 @@ The sidebar includes Dashboard, Accounts, Groups, Drafts, Queue, and Audit Logs.
 
 - Group URLs are normalized to `https://www.facebook.com/groups/{identifier}`. Group open is always a visible manual navigation through the selected assigned account; it never posts or publishes.
 - Draft media is copied into `{userData}/fb-account-manager/media`, checked by extension and file signature, and served to the renderer only through the confined `app-media://asset/{id}` protocol. Images are limited to 25 MiB and videos to 500 MiB.
-- Queue creation requires a READY draft and active account/group assignment. Items are `PENDING`, `PAUSED`, or `CANCELLED`; content and media are snapshotted at creation, so later draft edits do not change queued history.
-- Scheduled times are entered locally and stored as UTC ISO timestamps. Due items are labelled for review only; there is no executor or background publishing process.
+- Queue creation requires a READY draft and active account/group assignment. Items are immutable snapshots with `PENDING`, `PAUSED`, `RUNNING`, `SUBMITTED`, `SUCCEEDED`, `FAILED`, `NEEDS_ATTENTION`, or `CANCELLED` states; later draft edits do not change queued history.
+- Scheduled times are entered locally and stored as UTC ISO timestamps. Due items are labelled for review; the opt-in publishing engine described below is the only execution path.
 
 All workspace mutations are validated in the renderer and main process, use transactional repositories, and write concise audit events without draft bodies, media contents, cookies, tokens, or proxy passwords.
+
+## Publishing engine
+
+Goal 3 adds an opt-in visible-browser publishing engine. It is disabled by default and can be configured from **Settings**. The scheduler checks due, scheduled queue items at the configured interval; unscheduled items are manual-only. Manual **Run** actions always ask for confirmation, and a per-account serialization queue plus a global account limit prevents overlapping browser operations.
+
+Each execution claims a queue row with a lease token, records an attempt timeline, and stores only sanitized status, error, receipt, and evidence metadata. A verified visible post link is required for `SUCCEEDED`; accepted submissions without conclusive evidence remain `SUBMITTED`, and ambiguous results become `NEEDS_ATTENTION`. The engine never clicks Post twice automatically and never retries after the irreversible submit boundary without explicit duplicate-risk acknowledgement.
+
+If the application closes during execution, the lease and attempt are recovered on the next startup as `NEEDS_ATTENTION`. Login, checkpoint, CAPTCHA, identity, recovery, and locked-account signals open an account publishing block and stop further execution until a successful manual health check clears it. Diagnostics are limited to bounded screenshots under the ignored diagnostics directory; no cookies, tokens, passwords, full page HTML, or media contents are stored.
+
+The Facebook composer adapter uses visible UI selectors that may change as Facebook changes. A failed or uncertain selector interaction is surfaced as a safe failure and requires manual review. There is no private API, scraping, stealth behavior, CAPTCHA bypass, credential entry, proxy rotation, or automated background Facebook activity.
 
 ## Troubleshooting
 
@@ -77,4 +87,4 @@ All workspace mutations are validated in the renderer and main process, use tran
 
 ## Scope
 
-This release intentionally stops at safe account/profile lifecycle and manual content operations. Automatic publishing, comments, scraping, credential entry, CAPTCHA handling, stealth behavior, proxy rotation, and security bypasses remain out of scope.
+This release intentionally stops at safe account/profile lifecycle, manual content operations, and the opt-in visible-browser publishing engine described above. Comments, scraping, credential entry, CAPTCHA handling, stealth behavior, proxy rotation, and security bypasses remain out of scope.

@@ -7,6 +7,7 @@ data/
 profiles/
 media/
 runtime/
+diagnostics/
 fb-account-manager/
 **/profiles/
 **/media/
@@ -26,3 +27,5 @@ playwright-report/
 test-results/
 playwright/.cache/
 .playwright/
+*.png
+*.har

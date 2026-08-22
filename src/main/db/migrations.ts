@@ -137,6 +137,114 @@ export function runMigrations(db: Database.Database): void {
         UNIQUE (queue_item_id, sort_order)
       );
       CREATE INDEX IF NOT EXISTS idx_queue_item_media_asset ON queue_item_media(media_id);
+    `],
+    [3, `
+      PRAGMA defer_foreign_keys = ON;
+      DROP INDEX IF EXISTS idx_queue_status_scheduled;
+      DROP INDEX IF EXISTS idx_queue_account_group;
+      DROP INDEX IF EXISTS idx_queue_active_duplicate;
+      DROP INDEX IF EXISTS idx_queue_item_media_asset;
+      ALTER TABLE queue_item_media RENAME TO queue_item_media_v2;
+      ALTER TABLE queue_items RENAME TO queue_items_v2;
+
+      CREATE TABLE queue_items (
+        id TEXT PRIMARY KEY,
+        draft_id TEXT REFERENCES drafts(id) ON DELETE SET NULL,
+        account_id TEXT REFERENCES accounts(id) ON DELETE SET NULL,
+        group_id TEXT REFERENCES groups(id) ON DELETE SET NULL,
+        draft_title_snapshot TEXT NOT NULL,
+        body_snapshot TEXT NOT NULL,
+        link_url_snapshot TEXT,
+        account_name_snapshot TEXT NOT NULL,
+        group_name_snapshot TEXT NOT NULL,
+        group_url_snapshot TEXT NOT NULL,
+        snapshot_hash TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'PAUSED', 'RUNNING', 'SUBMITTED', 'SUCCEEDED', 'FAILED', 'NEEDS_ATTENTION', 'CANCELLED')),
+        scheduled_at TEXT,
+        execution_token TEXT,
+        lease_started_at TEXT,
+        attention_reason TEXT,
+        submitted_at TEXT,
+        completed_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT INTO queue_items (id, draft_id, account_id, group_id, draft_title_snapshot, body_snapshot, link_url_snapshot, account_name_snapshot, group_name_snapshot, group_url_snapshot, snapshot_hash, status, scheduled_at, created_at, updated_at)
+        SELECT id, draft_id, account_id, group_id, draft_title_snapshot, body_snapshot, link_url_snapshot, account_name_snapshot, group_name_snapshot, group_url_snapshot, snapshot_hash, status, scheduled_at, created_at, updated_at FROM queue_items_v2;
+
+      CREATE TABLE queue_item_media (
+        queue_item_id TEXT NOT NULL REFERENCES queue_items(id) ON DELETE CASCADE,
+        media_id TEXT NOT NULL REFERENCES media_assets(id) ON DELETE RESTRICT,
+        type TEXT NOT NULL CHECK (type IN ('IMAGE', 'VIDEO')),
+        original_name TEXT NOT NULL,
+        mime_type TEXT,
+        file_size INTEGER NOT NULL CHECK (file_size >= 0),
+        sort_order INTEGER NOT NULL CHECK (sort_order >= 0),
+        PRIMARY KEY (queue_item_id, media_id),
+        UNIQUE (queue_item_id, sort_order)
+      );
+      INSERT INTO queue_item_media SELECT * FROM queue_item_media_v2;
+      DROP TABLE queue_item_media_v2;
+      DROP TABLE queue_items_v2;
+
+      CREATE INDEX idx_queue_status_scheduled ON queue_items(status, scheduled_at);
+      CREATE INDEX idx_queue_account_status ON queue_items(account_id, status, scheduled_at);
+      CREATE INDEX idx_queue_account_group ON queue_items(account_id, group_id, created_at DESC);
+      CREATE UNIQUE INDEX idx_queue_active_duplicate ON queue_items(draft_id, snapshot_hash, account_id, group_id, IFNULL(scheduled_at, ''))
+        WHERE status IN ('PENDING', 'PAUSED', 'RUNNING', 'SUBMITTED', 'NEEDS_ATTENTION');
+      CREATE INDEX idx_queue_item_media_asset ON queue_item_media(media_id);
+
+      CREATE TABLE publish_attempts (
+        id TEXT PRIMARY KEY,
+        queue_item_id TEXT NOT NULL REFERENCES queue_items(id) ON DELETE CASCADE,
+        account_id TEXT REFERENCES accounts(id) ON DELETE SET NULL,
+        group_id TEXT REFERENCES groups(id) ON DELETE SET NULL,
+        attempt_number INTEGER NOT NULL CHECK (attempt_number >= 1),
+        status TEXT NOT NULL CHECK (status IN ('STARTING', 'COMPOSER_OPENED', 'CONTENT_FILLED', 'MEDIA_UPLOADED', 'SUBMITTING', 'SUBMITTED', 'SUCCEEDED', 'FAILED', 'NEEDS_ATTENTION')),
+        error_code TEXT,
+        error_message TEXT,
+        diagnostic_path TEXT,
+        diagnostic_created_at TEXT,
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE (queue_item_id, attempt_number)
+      );
+      CREATE INDEX idx_publish_attempts_queue ON publish_attempts(queue_item_id, attempt_number DESC);
+      CREATE INDEX idx_publish_attempts_started ON publish_attempts(started_at DESC);
+      CREATE INDEX idx_publish_attempts_status ON publish_attempts(status, started_at DESC);
+
+      CREATE TABLE publish_attempt_events (
+        id TEXT PRIMARY KEY,
+        attempt_id TEXT NOT NULL REFERENCES publish_attempts(id) ON DELETE CASCADE,
+        sequence INTEGER NOT NULL CHECK (sequence >= 1),
+        event_type TEXT NOT NULL,
+        message TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE (attempt_id, sequence)
+      );
+      CREATE INDEX idx_publish_attempt_events_attempt ON publish_attempt_events(attempt_id, sequence);
+
+      CREATE TABLE publish_receipts (
+        id TEXT PRIMARY KEY,
+        queue_item_id TEXT NOT NULL REFERENCES queue_items(id) ON DELETE CASCADE,
+        attempt_id TEXT NOT NULL UNIQUE REFERENCES publish_attempts(id) ON DELETE CASCADE,
+        result TEXT NOT NULL CHECK (result IN ('SUBMITTED', 'SUBMITTED_PENDING_APPROVAL', 'VERIFIED_PUBLISHED', 'UNKNOWN')),
+        group_url TEXT NOT NULL,
+        post_url TEXT,
+        evidence TEXT,
+        submitted_at TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_publish_receipts_queue ON publish_receipts(queue_item_id, submitted_at DESC);
+
+      CREATE TABLE account_publish_blocks (
+        account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+        reason TEXT NOT NULL CHECK (reason IN ('LOGIN_REQUIRED', 'CHECKPOINT')),
+        message TEXT NOT NULL,
+        blocked_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_account_publish_blocks_reason ON account_publish_blocks(reason, blocked_at DESC);
     `]
   ];
 

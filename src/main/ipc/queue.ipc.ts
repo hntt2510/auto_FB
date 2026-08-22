@@ -1,13 +1,13 @@
 import { z } from 'zod';
 import type { QueueService } from '@main/services/QueueService';
-import { accountIdSchema, queueBatchSchema, queueFilterSchema, queueIdSchema } from '@shared/schemas';
+import { accountIdSchema, draftIdSchema, queueBatchSchema, queueFilterSchema, queueIdSchema } from '@shared/schemas';
 import { parseOrThrow, registerAuthorizedHandler } from './authorized';
 
-const optionsSchema = z.object({ draftId: queueIdSchema, accountIds: z.array(accountIdSchema).max(100) });
+export const queueOptionsSchema = z.object({ draftId: draftIdSchema, accountIds: z.array(accountIdSchema).max(100) });
 
 export function registerQueueIpc(service: QueueService, allowedSenderIds: () => ReadonlySet<number>): () => void {
   const cleanups = [
-    registerAuthorizedHandler('queue:options', allowedSenderIds, (_event, input: unknown) => { const value = parseOrThrow(optionsSchema.safeParse(input)); return service.options(value.draftId, value.accountIds); }),
+    registerAuthorizedHandler('queue:options', allowedSenderIds, (_event, input: unknown) => { const value = parseOrThrow(queueOptionsSchema.safeParse(input)); return service.options(value.draftId, value.accountIds); }),
     registerAuthorizedHandler('queue:preview', allowedSenderIds, (_event, input: unknown) => service.preview(parseOrThrow(queueBatchSchema.safeParse(input)))),
     registerAuthorizedHandler('queue:create', allowedSenderIds, (_event, input: unknown) => service.create(parseOrThrow(queueBatchSchema.safeParse(input)))),
     registerAuthorizedHandler('queue:list', allowedSenderIds, (_event, filter: unknown) => service.list(parseOrThrow(queueFilterSchema.safeParse(filter ?? {})))),

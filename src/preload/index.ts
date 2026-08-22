@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AccountApi, AssignmentAccount, AuditLog, CreateAccountInput, DashboardApi, DashboardSummary, DeleteAccountInput, Draft, DraftApi, DraftFilter, DraftInput, DraftMedia, DraftStatus, FacebookAccount, FacebookGroup, GroupApi, GroupFilter, GroupImportPreview, GroupImportResult, GroupInput, GroupOpenResult, HealthCheckResult, LogApi, LogFilter, MediaReorderInput, QueueApi, QueueBatchInput, QueueFilter, QueueItem, QueueOptions, QueuePreview, UpdateAccountInput } from '@shared/types';
+import type { AccountApi, AssignmentAccount, AuditLog, CreateAccountInput, DashboardApi, DashboardSummary, DeleteAccountInput, Draft, DraftApi, DraftFilter, DraftInput, DraftMedia, DraftStatus, FacebookAccount, FacebookGroup, GroupApi, GroupFilter, GroupImportPreview, GroupImportResult, GroupInput, GroupOpenResult, HealthCheckResult, LogApi, LogFilter, MediaReorderInput, PublishApi, PublishAttempt, PublishingEngineStatus, PublishingRunResult, PublishingSettings, PublishingSettingsApi, QueueApi, QueueBatchInput, QueueFilter, QueueItem, QueueOptions, QueuePreview, RequeueInput, UpdateAccountInput } from '@shared/types';
 
 type IpcResponse<T> = { ok: true; data: T } | { ok: false; error: { code: string; message: string } };
 
@@ -76,9 +76,29 @@ const queueApi: QueueApi = {
 
 const dashboardApi: DashboardApi = { summary: () => invoke<DashboardSummary>('dashboard:summary') };
 
+const publishApi: PublishApi = {
+  status: () => invoke<PublishingEngineStatus>('publishing:status'),
+  run: (queueId: string) => invoke<PublishingRunResult>('publishing:run', queueId),
+  runSelected: (queueIds: string[]) => invoke<PublishingRunResult>('publishing:run-selected', { queueIds }),
+  runDue: () => invoke<PublishingRunResult>('publishing:run-due'),
+  attempts: (queueId: string) => invoke<PublishAttempt[]>('publishing:attempts', queueId),
+  retry: (queueId: string, acknowledgeDuplicateRisk: boolean) => invoke<QueueItem>('publishing:retry', { queueId, acknowledgeDuplicateRisk }),
+  requeue: (input: RequeueInput) => invoke<QueueItem>('publishing:requeue', input),
+  resolve: (queueId: string) => invoke<QueueItem>('publishing:resolve', queueId),
+  openDiagnostic: (attemptId: string) => invoke<void>('publishing:open-diagnostic', attemptId),
+  onChanged: (listener: () => void) => { const callback = () => listener(); ipcRenderer.on('publishing:changed', callback); return () => ipcRenderer.removeListener('publishing:changed', callback); }
+};
+
+const settingsApi: PublishingSettingsApi = {
+  getPublishing: () => invoke<PublishingSettings>('settings:get-publishing'),
+  updatePublishing: (input: PublishingSettings) => invoke<PublishingSettings>('settings:update-publishing', input)
+};
+
 contextBridge.exposeInMainWorld('accountApi', accountApi);
 contextBridge.exposeInMainWorld('logApi', logApi);
 contextBridge.exposeInMainWorld('groupApi', groupApi);
 contextBridge.exposeInMainWorld('draftApi', draftApi);
 contextBridge.exposeInMainWorld('queueApi', queueApi);
 contextBridge.exposeInMainWorld('dashboardApi', dashboardApi);
+contextBridge.exposeInMainWorld('publishApi', publishApi);
+contextBridge.exposeInMainWorld('settingsApi', settingsApi);

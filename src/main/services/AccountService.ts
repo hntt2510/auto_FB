@@ -11,6 +11,7 @@ import { AppError } from '@main/errors';
 
 export class AccountService {
   readonly browser: BrowserManager;
+  private healthObserver?: (result: HealthCheckResult) => void;
 
   constructor(
     private readonly accounts: AccountRepository,
@@ -127,7 +128,8 @@ export class AccountService {
 
   async open(accountId: string): Promise<FacebookAccount> { const id = this.validId(accountId); return publicAccount(await this.browser.openAccount(id)); }
   async close(accountId: string): Promise<FacebookAccount> { const id = this.validId(accountId); return publicAccount(await this.browser.closeAccount(id)); }
-  async healthCheck(accountId: string): Promise<HealthCheckResult> { return this.browser.healthCheck(this.validId(accountId)); }
+  async healthCheck(accountId: string): Promise<HealthCheckResult> { const result = await this.browser.healthCheck(this.validId(accountId)); this.healthObserver?.(result); return result; }
+  setHealthObserver(observer: (result: HealthCheckResult) => void): void { this.healthObserver = observer; }
 
   async openProfileFolder(accountId: string): Promise<void> {
     const account = this.require(this.validId(accountId));

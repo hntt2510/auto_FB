@@ -4,11 +4,16 @@ import type { AssignmentAccount, FacebookGroup, GroupFilter, GroupInput } from '
 import { normalizeFacebookGroupUrl, normalizeTags } from '@shared/groupUrl';
 
 type GroupRow = { id: string; name: string; url: string; normalized_url: string; facebook_group_id: string | null; notes: string | null; active: number; assigned_accounts_count: number; tags: string | null; created_at: string; updated_at: string };
+type AssignmentRow = { id: string; name: string; status: AssignmentAccount['status']; last_health_status: AssignmentAccount['lastHealthStatus'] | null };
 
 function mapGroup(row: GroupRow): FacebookGroup {
   return { id: row.id, name: row.name, url: row.url, normalizedUrl: row.normalized_url, facebookGroupId: row.facebook_group_id ?? undefined,
     notes: row.notes ?? undefined, tags: row.tags ? row.tags.split('\u001f').filter(Boolean) : [], active: Boolean(row.active),
     assignedAccountsCount: row.assigned_accounts_count, createdAt: row.created_at, updatedAt: row.updated_at };
+}
+
+function mapAssignment(row: AssignmentRow): AssignmentAccount {
+  return { id: row.id, name: row.name, status: row.status, lastHealthStatus: row.last_health_status ?? undefined };
 }
 
 const select = `SELECT g.*, (SELECT COUNT(*) FROM account_groups ag WHERE ag.group_id = g.id AND ag.enabled = 1) AS assigned_accounts_count,
@@ -86,7 +91,7 @@ export class GroupRepository {
 
   assignments(groupId: string): AssignmentAccount[] {
     return this.db.prepare(`SELECT a.id, a.name, a.status, a.last_health_status FROM accounts a JOIN account_groups ag ON ag.account_id = a.id WHERE ag.group_id = ? AND ag.enabled = 1 ORDER BY a.name COLLATE NOCASE`)
-      .all(groupId) as AssignmentAccount[];
+      .all(groupId).map((row) => mapAssignment(row as AssignmentRow));
   }
 
   replaceAssignments(groupId: string, accountIds: string[]): AssignmentAccount[] {
@@ -114,7 +119,7 @@ export class GroupRepository {
   }
 
   hasActiveQueueItems(id: string): boolean {
-    return Boolean(this.db.prepare("SELECT 1 FROM queue_items WHERE group_id = ? AND status IN ('PENDING', 'PAUSED') LIMIT 1").get(id));
+    return Boolean(this.db.prepare("SELECT 1 FROM queue_items WHERE group_id = ? AND status IN ('PENDING', 'PAUSED', 'RUNNING', 'SUBMITTED', 'NEEDS_ATTENTION') LIMIT 1").get(id));
   }
 
   delete(id: string): void { this.db.prepare('DELETE FROM groups WHERE id = ?').run(id); }

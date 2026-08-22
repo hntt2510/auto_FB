@@ -75,6 +75,18 @@ export class BrowserManager {
     return this.enqueue(accountId, () => this.navigateAccountPageInternal(accountId, url));
   }
 
+  async withAccountPage<T>(accountId: string, operation: (page: Page) => Promise<T>): Promise<T> {
+    return this.enqueue(accountId, async () => {
+      if (this.shuttingDown) throw new AppError('BROWSER_LAUNCH_FAILED', 'Browser manager is shutting down.');
+      let entry = this.contexts.get(accountId);
+      if (!entry) { await this.launch(this.requireAccount(accountId), false); entry = this.contexts.get(accountId); }
+      if (!entry) throw new AppError('BROWSER_LAUNCH_FAILED', 'Unable to open the account browser.');
+      const page = await entry.context.newPage();
+      try { return await operation(page); }
+      finally { if (!page.isClosed()) await page.close().catch(() => undefined); }
+    });
+  }
+
   private async navigateAccountPageInternal(accountId: string, url: string): Promise<{ accountId: string; status: 'OPENED' | 'LOGIN_REQUIRED' | 'CHECKPOINT' | 'ERROR'; reason?: string }> {
     if (this.shuttingDown) throw new AppError('BROWSER_LAUNCH_FAILED', 'Browser manager is shutting down.');
     const normalized = normalizeFacebookGroupUrl(url).normalizedUrl;
@@ -148,6 +160,11 @@ export class BrowserManager {
     // Any lock left here is an invariant violation, but clearing it is safe
     // only after every queued lifecycle operation has settled.
     this.locks.clear();
+  }
+
+  async abortRunningContexts(): Promise<void> {
+    this.shuttingDown = true;
+    await Promise.allSettled([...this.contexts.values()].map((entry) => { entry.closing = true; return entry.context.close(); }));
   }
 
   private async launch(account: FacebookAccount, temporary: boolean): Promise<FacebookAccount> {

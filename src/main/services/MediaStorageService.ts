@@ -1,6 +1,6 @@
 import { dialog } from 'electron';
 import { copyFile, mkdir, open, rm, stat, lstat } from 'node:fs/promises';
-import { existsSync, lstatSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, realpathSync } from 'node:fs';
 import { basename, extname, join, relative, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { MediaType } from '@shared/types';
@@ -15,7 +15,7 @@ const VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.webm']);
 export type ManagedMediaFile = { id: string; type: MediaType; originalName: string; storedName: string; localPath: string; mimeType: string; fileSize: number };
 
 export class MediaStorageService {
-  constructor(public readonly root: string) {}
+  constructor(public readonly root: string) { this.assertSafeRoot(); }
 
   async chooseAndCopy(): Promise<ManagedMediaFile | undefined> {
     const result = await dialog.showOpenDialog({ properties: ['openFile'], filters: [{ name: 'Media', extensions: ['jpg', 'jpeg', 'png', 'webp', 'mp4', 'mov', 'webm'] }] });
@@ -24,6 +24,7 @@ export class MediaStorageService {
   }
 
   async copyIn(sourcePath: string): Promise<ManagedMediaFile> {
+    this.assertSafeRoot();
     const source = resolve(sourcePath);
     const sourceInfo = await stat(source).catch(() => undefined);
     if (!sourceInfo?.isFile()) throw new AppError('MEDIA_INVALID', 'Selected media file is unavailable.');
@@ -42,7 +43,7 @@ export class MediaStorageService {
   }
 
   assertManagedPath(filePath: string): string {
-    const root = resolve(this.root); const target = resolve(filePath); const relativePath = relative(root, target);
+    const root = this.assertSafeRoot(); const target = resolve(filePath); const relativePath = relative(root, target);
     if (!relativePath || relativePath.startsWith('..') || relativePath.includes('\\') || relativePath.includes('/') || !existsSync(target)) throw new AppError('INVALID_PROFILE_PATH', 'Media path is outside managed storage.');
     const info = lstatSync(target); if (info.isSymbolicLink() || !info.isFile()) throw new AppError('MEDIA_INVALID', 'Managed media path is not a regular file.');
     return target;
@@ -55,7 +56,23 @@ export class MediaStorageService {
     await rm(target, { force: false });
   }
 
+  async validateManagedFile(filePath: string, type: MediaType): Promise<string> {
+    const target = this.assertManagedPath(filePath); const extension = extname(target).toLowerCase(); const handle = await open(target, 'r'); const signature = Buffer.alloc(16);
+    try { await handle.read(signature, 0, signature.length, 0); } finally { await handle.close(); }
+    if (!hasValidSignature(type, extension, signature)) throw new AppError('MEDIA_INVALID', 'Managed media signature is invalid.');
+    return target;
+  }
+
   previewUrl(assetId: string): string { return `app-media://asset/${encodeURIComponent(assetId)}`; }
+
+  assertSafeRoot(): string {
+    const root = resolve(this.root); mkdirSync(root, { recursive: true });
+    const info = lstatSync(root);
+    if (info.isSymbolicLink() || !info.isDirectory()) throw new AppError('INVALID_PROFILE_PATH', 'Managed media root must be a regular directory.');
+    const real = realpathSync.native(root);
+    if (process.platform === 'win32' ? real.toLowerCase() !== root.toLowerCase() : real !== root) throw new AppError('INVALID_PROFILE_PATH', 'Managed media root cannot redirect outside application data.');
+    return root;
+  }
 }
 
 export function hasValidSignature(type: MediaType, extension: string, signature: Uint8Array): boolean {

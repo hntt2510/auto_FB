@@ -2,7 +2,7 @@ import type { Locator, Page } from 'playwright';
 import { SessionHealthService } from '@main/browser/SessionHealthService';
 import { normalizeFacebookGroupUrl } from '@shared/groupUrl';
 import type { QueueRecord } from '@main/db/repositories/QueueRepository';
-import type { SelectorProbeField, SelectorProbeResult } from '@shared/types';
+import type { ComposerEditorType, ComposerEntryMethod, SelectorProbeField, SelectorProbeResult } from '@shared/types';
 import { PublishingError } from './PublishingError';
 import { FACEBOOK_SELECTORS_VERSION, facebookText } from './selectors/facebookSelectors';
 
@@ -10,6 +10,8 @@ export type PostCandidate = { url: string; canonicalUrl: string; container?: Loc
 export type SubmissionEvidence = { result: 'SUBMITTED' | 'SUBMITTED_PENDING_APPROVAL' | 'VERIFIED_PUBLISHED' | 'UNKNOWN'; evidence: string; postUrl?: string };
 export type ComposerHandle = { container: Locator; textbox: Locator };
 export type SubmissionBaseline = { urls: string[]; bodyFingerprint: string; candidates?: PostCandidate[] };
+export type ComposerContentEntry = { method: ComposerEntryMethod; editorType: ComposerEditorType; visibleContentPresent: boolean; contentLength: number; expectedLength: number };
+export type PreflightDiagnosticCapture = (page: Page, status: SelectorProbeResult['status']) => Promise<string | undefined>;
 
 const EMPTY_FIELD: SelectorProbeField = { status: 'NOT_TESTED' };
 
@@ -79,14 +81,25 @@ export async function waitForEnabled(locator: Pick<Locator, 'isVisible' | 'isEna
   return await locator.isVisible().catch(() => false) && await locator.isEnabled().catch(() => false);
 }
 
+function normalizeComposerText(value: string): string {
+  return value.replace(/\u00a0/g, ' ').replace(/\r\n?/g, '\n').replace(/[ \t\f\v]+/g, ' ').replace(/[ \t]+\n/g, '\n').replace(/\n[ \t]+/g, '\n').trim();
+}
+
+function contentMatches(observed: string, expected: string): boolean {
+  const normalizedExpected = normalizeComposerText(expected);
+  if (!normalizedExpected) return true;
+  const normalizedObserved = normalizeComposerText(observed);
+  return Boolean(normalizedObserved && normalizedObserved === normalizedExpected);
+}
+
 export async function probePostButton(candidates: Locator[], contentFilled = true, timeoutMs = 4000): Promise<SelectorProbeField> {
   if (candidates.length > 1) return { status: 'AMBIGUOUS', count: candidates.length, reason: 'Multiple composer-scoped Post buttons were found.' };
   const button = candidates[0];
   if (!button) return { status: 'MISSING', count: 0, reason: 'No unique composer-scoped Post button was found.' };
-  const enabled = contentFilled ? await waitForEnabled(button, timeoutMs) : await button.isVisible().catch(() => false) && await button.isEnabled().catch(() => false);
-  return enabled
-    ? { status: 'FOUND', count: 1, enabled: true }
-    : { status: 'MISSING', count: 1, enabled: false, reason: 'Post button was found but remained disabled after content fill.' };
+  const visible = await button.isVisible().catch(() => false);
+  if (!contentFilled) return visible ? { status: 'FOUND', count: 1, enabled: await button.isEnabled().catch(() => false) } : { status: 'MISSING', count: 1, enabled: false, reason: 'Post button is not visible.' };
+  const enabled = visible && await waitForEnabled(button, timeoutMs);
+  return enabled ? { status: 'FOUND', count: 1, enabled: true } : { status: 'MISSING', count: 1, enabled: false, reason: 'Post button was found but remained disabled after verified composer content.' };
 }
 
 export function hasPublishableContent(item: Pick<QueueRecord, 'body' | 'linkUrl' | 'media'>): boolean {
@@ -123,31 +136,53 @@ export class FacebookComposerAdapter {
     return { container, textbox };
   }
 
-  async preflight(page: Page, item: QueueRecord, fillContent = false): Promise<{ probe: SelectorProbeResult; filledContent: boolean; handle?: ComposerHandle }> {
+  async preflight(page: Page, item: QueueRecord, fillContent = false, captureDiagnostic?: PreflightDiagnosticCapture): Promise<{ probe: SelectorProbeResult; filledContent: boolean; handle?: ComposerHandle }> {
     const checkedAt = new Date().toISOString();
     const base = { id: undefined, accountId: item.accountId ?? '', groupId: item.groupId ?? '', selectorVersion: this.selectorsVersion, checkedAt, warnings: [] as string[] };
     if (fillContent && !hasPublishableContent(item)) {
-      return { probe: { ...base, status: 'MISSING', session: { status: 'NOT_TESTED', reason: 'EMPTY_PUBLISH_CONTENT' }, group: { status: 'NOT_TESTED' }, composerTrigger: { status: 'NOT_TESTED' }, composerTextbox: { status: 'NOT_TESTED' }, mediaInput: { status: 'NOT_TESTED' }, postButton: { status: 'MISSING', reason: 'EMPTY_PUBLISH_CONTENT' }, uploadBusy: EMPTY_FIELD, approvalSignal: EMPTY_FIELD, acceptanceSignal: EMPTY_FIELD }, filledContent: false };
+      return { probe: { ...base, status: 'MISSING', reason: 'EMPTY_PUBLISH_CONTENT', session: { status: 'NOT_TESTED', reason: 'EMPTY_PUBLISH_CONTENT' }, group: { status: 'NOT_TESTED' }, composerTrigger: { status: 'NOT_TESTED' }, composerTextbox: { status: 'NOT_TESTED' }, mediaInput: { status: 'NOT_TESTED' }, postButton: { status: 'MISSING', reason: 'EMPTY_PUBLISH_CONTENT' }, uploadBusy: EMPTY_FIELD, approvalSignal: EMPTY_FIELD, acceptanceSignal: EMPTY_FIELD }, filledContent: false };
     }
     try { await this.openGroup(page, item.groupUrl); }
-    catch (error) { const reason = error instanceof Error ? error.message : 'Group could not be opened.'; return { probe: { ...base, status: error instanceof PublishingError && error.code === 'ACCOUNT_CHECKPOINT' ? 'MISSING' : 'NOT_TESTED', session: { status: error instanceof PublishingError && error.code === 'ACCOUNT_LOGIN_REQUIRED' ? 'MISSING' : 'FOUND' }, group: { status: 'MISSING', reason }, composerTrigger: EMPTY_FIELD, composerTextbox: EMPTY_FIELD, mediaInput: EMPTY_FIELD, postButton: EMPTY_FIELD, uploadBusy: EMPTY_FIELD, approvalSignal: EMPTY_FIELD, acceptanceSignal: EMPTY_FIELD }, filledContent: false }; }
+    catch (error) { const reason = error instanceof Error ? error.message : 'Group could not be opened.'; return { probe: { ...base, status: error instanceof PublishingError && error.code === 'ACCOUNT_CHECKPOINT' ? 'MISSING' : 'NOT_TESTED', reason, session: { status: error instanceof PublishingError && error.code === 'ACCOUNT_LOGIN_REQUIRED' ? 'MISSING' : 'FOUND' }, group: { status: 'MISSING', reason }, composerTrigger: EMPTY_FIELD, composerTextbox: EMPTY_FIELD, mediaInput: EMPTY_FIELD, postButton: EMPTY_FIELD, uploadBusy: EMPTY_FIELD, approvalSignal: EMPTY_FIELD, acceptanceSignal: EMPTY_FIELD }, filledContent: false }; }
     const triggerCandidates = await this.visibleCandidates([page.getByRole('button', { name: facebookText.composerTrigger }), page.locator('[role="button"]').filter({ hasText: facebookText.composerTrigger })]);
-    if (triggerCandidates.length !== 1) return { probe: { ...base, status: triggerCandidates.length > 1 ? 'AMBIGUOUS' : 'MISSING', session: { status: 'FOUND' }, group: { status: 'FOUND' }, composerTrigger: { status: triggerCandidates.length > 1 ? 'AMBIGUOUS' : 'MISSING', count: triggerCandidates.length }, composerTextbox: EMPTY_FIELD, mediaInput: EMPTY_FIELD, postButton: EMPTY_FIELD, uploadBusy: EMPTY_FIELD, approvalSignal: EMPTY_FIELD, acceptanceSignal: EMPTY_FIELD }, filledContent: false };
+    if (triggerCandidates.length !== 1) return { probe: { ...base, status: triggerCandidates.length > 1 ? 'AMBIGUOUS' : 'MISSING', reason: triggerCandidates.length > 1 ? 'COMPOSER_TRIGGER_AMBIGUOUS' : 'COMPOSER_TRIGGER_NOT_FOUND', session: { status: 'FOUND' }, group: { status: 'FOUND' }, composerTrigger: { status: triggerCandidates.length > 1 ? 'AMBIGUOUS' : 'MISSING', count: triggerCandidates.length }, composerTextbox: EMPTY_FIELD, mediaInput: EMPTY_FIELD, postButton: EMPTY_FIELD, uploadBusy: EMPTY_FIELD, approvalSignal: EMPTY_FIELD, acceptanceSignal: EMPTY_FIELD }, filledContent: false };
     let handle: ComposerHandle;
-    try { handle = await this.openComposer(page); } catch (error) { const reason = error instanceof Error ? error.message : 'Textbox was not found.'; const ambiguous = /multiple/i.test(reason); return { probe: { ...base, status: ambiguous ? 'AMBIGUOUS' : 'MISSING', session: { status: 'FOUND' }, group: { status: 'FOUND' }, composerTrigger: { status: 'FOUND', count: 1 }, composerTextbox: { status: ambiguous ? 'AMBIGUOUS' : 'MISSING', reason }, mediaInput: EMPTY_FIELD, postButton: EMPTY_FIELD, uploadBusy: EMPTY_FIELD, approvalSignal: EMPTY_FIELD, acceptanceSignal: EMPTY_FIELD }, filledContent: false }; }
+    try { handle = await this.openComposer(page); } catch (error) { const reason = error instanceof Error ? error.message : 'Textbox was not found.'; const ambiguous = /multiple/i.test(reason); return { probe: { ...base, status: ambiguous ? 'AMBIGUOUS' : 'MISSING', reason: ambiguous ? 'COMPOSER_TEXTBOX_AMBIGUOUS' : 'COMPOSER_TEXTBOX_NOT_FOUND', session: { status: 'FOUND' }, group: { status: 'FOUND' }, composerTrigger: { status: 'FOUND', count: 1 }, composerTextbox: { status: ambiguous ? 'AMBIGUOUS' : 'MISSING', reason }, mediaInput: EMPTY_FIELD, postButton: EMPTY_FIELD, uploadBusy: EMPTY_FIELD, approvalSignal: EMPTY_FIELD, acceptanceSignal: EMPTY_FIELD }, filledContent: false }; }
     const mediaInputCandidates = await this.visibleCandidates([handle.container.locator('input[type="file"]')]);
     const mediaInput = mediaInputCandidates.length === 1 ? mediaInputCandidates[0] : undefined;
     const requiresMedia = item.media.length > 0;
     const mediaStatus = mediaInput ? { status: 'FOUND' as const, count: 1 } : mediaInputCandidates.length > 1 ? { status: 'AMBIGUOUS' as const, count: mediaInputCandidates.length } : requiresMedia ? { status: 'MISSING' as const, count: 0 } : { status: 'NOT_TESTED' as const, count: 0, reason: 'No media is required for this snapshot.' };
     const statuses = { session: { status: 'FOUND' as const }, group: { status: 'FOUND' as const }, composerTrigger: { status: 'FOUND' as const, count: 1 }, composerTextbox: { status: 'FOUND' as const, count: 1 }, mediaInput: mediaStatus, postButton: EMPTY_FIELD, uploadBusy: { status: (await handle.container.getByText(facebookText.uploadBusy).count().catch(() => 0)) ? 'FOUND' as const : 'NOT_TESTED' as const }, approvalSignal: { status: (await handle.container.getByText(facebookText.pendingApproval).count().catch(() => 0)) ? 'FOUND' as const : 'NOT_TESTED' as const }, acceptanceSignal: { status: (await handle.container.getByText(facebookText.accepted).count().catch(() => 0)) ? 'FOUND' as const : 'NOT_TESTED' as const } };
-    let filled = false;
-    if (fillContent) { await this.fillContent(handle.textbox, item.body, item.linkUrl); filled = true; }
-    const postButtonCandidates = await this.visibleCandidates([handle.container.getByRole('button', { name: facebookText.postButton }), handle.container.locator('[role="button"]').filter({ hasText: facebookText.postButton })]);
-    const postButtonStatus = await probePostButton(postButtonCandidates, fillContent);
-    const required: string[] = [statuses.composerTextbox.status, postButtonStatus.status]; if (requiresMedia) required.push(statuses.mediaInput.status); const status = required.includes('MISSING') ? 'MISSING' : required.includes('AMBIGUOUS') ? 'AMBIGUOUS' : 'FOUND';
+    const expectedContent = this.composeContent(item.body, item.linkUrl);
+    let entry: ComposerContentEntry | undefined;
+    let postButtonCandidates = await this.visibleCandidates([handle.container.getByRole('button', { name: facebookText.postButton }), handle.container.locator('[role="button"]').filter({ hasText: facebookText.postButton })]);
+    let postButtonStatus: SelectorProbeField = await probePostButton(postButtonCandidates, false);
+    if (fillContent) {
+      entry = await this.enterComposerContent(handle.textbox, expectedContent);
+      postButtonCandidates = await this.visibleCandidates([handle.container.getByRole('button', { name: facebookText.postButton }), handle.container.locator('[role="button"]').filter({ hasText: facebookText.postButton })]);
+      postButtonStatus = await probePostButton(postButtonCandidates, true, entry.visibleContentPresent ? 500 : 0);
+      const shouldFallback = !entry.visibleContentPresent || (postButtonStatus.count === 1 && postButtonStatus.enabled === false);
+      if (shouldFallback) {
+        const fallback = await this.enterComposerContent(handle.textbox, expectedContent, 'KEYBOARD_INSERT');
+        entry = fallback;
+        postButtonCandidates = await this.visibleCandidates([handle.container.getByRole('button', { name: facebookText.postButton }), handle.container.locator('[role="button"]').filter({ hasText: facebookText.postButton })]);
+        postButtonStatus = await probePostButton(postButtonCandidates, true, 2000);
+      }
+    }
+    const required: string[] = [statuses.composerTextbox.status, postButtonStatus.status]; if (requiresMedia) required.push(statuses.mediaInput.status); let status: SelectorProbeResult['status'] = required.includes('MISSING') ? 'MISSING' : required.includes('AMBIGUOUS') ? 'AMBIGUOUS' : 'FOUND';
+    let reason: string | undefined;
+    if (fillContent && entry && !entry.visibleContentPresent) { status = 'MISSING'; reason = 'EDITOR_CONTENT_NOT_OBSERVED'; }
+    else if (fillContent && postButtonStatus.count === 1 && postButtonStatus.enabled === false) { status = 'MISSING'; reason = `Post remained disabled after verified composer content. Entry method: ${entry?.method ?? 'UNKNOWN'}.`; }
+    else if (postButtonStatus.status === 'AMBIGUOUS') { status = 'AMBIGUOUS'; reason = 'POST_BUTTON_AMBIGUOUS'; }
+    else if (postButtonStatus.count === 0) { status = 'MISSING'; reason = 'POST_BUTTON_NOT_FOUND'; }
+    const probe: SelectorProbeResult = { ...base, status, reason, ...statuses, postButton: postButtonStatus, editorType: entry?.editorType, contentObserved: entry?.visibleContentPresent, observedContentLength: entry?.contentLength, expectedContentLength: entry?.expectedLength, entryMethod: entry?.method };
+    if (reason) base.warnings.push(reason);
+    if (captureDiagnostic && status !== 'FOUND') {
+      try { probe.diagnosticPath = await captureDiagnostic(page, status); } catch { /* diagnostics must never block preflight */ }
+    }
     const dismissalWarning = await this.dismissComposer(page, handle.container);
     if (dismissalWarning) base.warnings.push(dismissalWarning);
-    return { probe: { ...base, status, ...statuses, postButton: postButtonStatus }, filledContent: filled, handle };
+    return { probe, filledContent: Boolean(entry?.visibleContentPresent), handle };
   }
 
   async captureBaseline(page: Page, body: string): Promise<SubmissionBaseline> {
@@ -155,10 +190,24 @@ export class FacebookComposerAdapter {
     return { urls: candidates.map((candidate) => candidate.canonicalUrl), candidates, bodyFingerprint: this.fingerprint(body) };
   }
 
-  async fillContent(textboxOrHandle: Locator | ComposerHandle, body: string, linkUrl?: string): Promise<void> {
+  async fillContent(textboxOrHandle: Locator | ComposerHandle, body: string, linkUrl?: string): Promise<ComposerContentEntry> {
+    const content = this.composeContent(body, linkUrl);
+    const entry = await this.enterComposerContent(textboxOrHandle, content);
+    if (content && !entry.visibleContentPresent) throw new PublishingError('CONTENT_FILL_FAILED', 'Facebook composer content was not observed after entry.');
+    return entry;
+  }
+
+  async enterComposerContent(textboxOrHandle: Locator | ComposerHandle, content: string, method: ComposerEntryMethod = 'FILL'): Promise<ComposerContentEntry> {
     const textbox = 'textbox' in textboxOrHandle ? textboxOrHandle.textbox : textboxOrHandle;
-    const content = linkUrl && !this.containsLink(body, linkUrl) ? `${body}${body ? '\n\n' : ''}${linkUrl}` : body;
-    try { await textbox.fill(content); } catch { throw new PublishingError('CONTENT_FILL_FAILED', 'Unable to fill the Facebook composer.'); }
+    const editorType = await this.detectEditorType(textbox);
+    try {
+      if (method === 'FILL') await textbox.fill(content);
+      else await this.keyboardInsert(textbox, content);
+    } catch {
+      return { method, editorType, visibleContentPresent: false, contentLength: 0, expectedLength: content.length };
+    }
+    const observed = await this.waitForObservedContent(textbox, editorType, content);
+    return { method, editorType, visibleContentPresent: contentMatches(observed, content), contentLength: observed.length, expectedLength: content.length };
   }
 
   async uploadMedia(page: Page, paths: string[], hasVideo: boolean, videoTimeoutSeconds: number, container?: Locator): Promise<void> {
@@ -204,6 +253,42 @@ export class FacebookComposerAdapter {
   }
 
   private async findTextbox(scope: Locator): Promise<Locator | undefined> { return this.uniqueVisible([scope.getByRole('textbox', { name: facebookText.composerTextbox }), scope.locator('[contenteditable="true"][role="textbox"]'), scope.locator('[contenteditable="true"]')]); }
+  private composeContent(body: string, linkUrl?: string): string { return linkUrl && !this.containsLink(body, linkUrl) ? `${body}${body ? '\n\n' : ''}${linkUrl}` : body; }
+  private async detectEditorType(textbox: Locator): Promise<ComposerEditorType> {
+    const contenteditable = typeof textbox.getAttribute === 'function' ? await textbox.getAttribute('contenteditable').catch(() => undefined) : undefined;
+    if (contenteditable?.toLowerCase() === 'true') return 'CONTENTEDITABLE';
+    const tagName = typeof textbox.evaluate === 'function' ? await textbox.evaluate((node) => node.tagName).catch(() => '') : '';
+    if (tagName.toUpperCase() === 'TEXTAREA') return 'TEXTAREA';
+    if (tagName.toUpperCase() === 'INPUT') return 'INPUT';
+    return 'UNKNOWN';
+  }
+  private async readComposerContent(textbox: Locator, editorType: ComposerEditorType): Promise<string> {
+    if (editorType === 'INPUT' || editorType === 'TEXTAREA') return typeof textbox.inputValue === 'function' ? await textbox.inputValue().catch(() => '') : '';
+    if (editorType === 'CONTENTEDITABLE') {
+      const innerText = typeof textbox.innerText === 'function' ? await textbox.innerText().catch(() => '') : '';
+      return innerText || (typeof textbox.textContent === 'function' ? await textbox.textContent().catch(() => '') || '' : '');
+    }
+    if (typeof textbox.inputValue === 'function') return await textbox.inputValue().catch(() => '');
+    if (typeof textbox.innerText === 'function') return await textbox.innerText().catch(() => '');
+    return typeof textbox.textContent === 'function' ? await textbox.textContent().catch(() => '') || '' : '';
+  }
+  private async waitForObservedContent(textbox: Locator, editorType: ComposerEditorType, expected: string, timeoutMs = 750): Promise<string> {
+    let observed = await this.readComposerContent(textbox, editorType);
+    if (!expected || contentMatches(observed, expected)) return observed;
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      observed = await this.readComposerContent(textbox, editorType);
+      if (contentMatches(observed, expected)) break;
+    }
+    return observed;
+  }
+  private async keyboardInsert(textbox: Locator, content: string): Promise<void> {
+    await textbox.focus();
+    await textbox.press('ControlOrMeta+A');
+    await textbox.press('Backspace');
+    await textbox.page().keyboard.insertText(content);
+  }
   private async dismissComposer(page: Page, container: Locator): Promise<string | undefined> {
     const close = await this.uniqueVisible([container.getByRole('button', { name: /close|cancel|discard/i }), container.locator('[aria-label*="Close" i]')]);
     if (close) await close.click().catch(() => undefined);

@@ -91,6 +91,7 @@ const publishApi: PublishApi = {
   probe: (accountId: string, groupId: string) => invoke<SelectorProbeResult>('publishing:probe', { accountId, groupId }),
   reconciliations: (queueId: string) => invoke<ReconciliationRecord[]>('publishing:reconciliations', queueId),
   openDiagnostic: (attemptId: string) => invoke<void>('publishing:open-diagnostic', attemptId),
+  openPreflightDiagnostic: (queueId: string) => invoke<void>('publishing:open-preflight-diagnostic', queueId),
   deleteDiagnostic: (attemptId: string) => invoke<void>('publishing:delete-diagnostic', attemptId),
   evaluateLiveReadiness: (queueId: string) => invoke<LiveReadiness>('publishing:live-readiness', queueId),
   armScheduler: (acknowledgeOverdue = false) => invoke<PublishingEngineStatus>('publishing:arm-scheduler', { acknowledgeOverdue }),

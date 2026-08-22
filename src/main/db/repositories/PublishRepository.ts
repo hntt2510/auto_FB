@@ -101,6 +101,12 @@ export class PublishRepository {
     return { id: row.id, checkedAt: row.checked_at, selectorVersion: row.selector_version, snapshotHash: parsed.snapshotHash, status: row.status };
   }
 
+  preflightDiagnosticPath(queueItemId: string): string | undefined {
+    const row = this.db.prepare('SELECT details_json FROM publish_preflights WHERE queue_item_id = ? ORDER BY checked_at DESC LIMIT 1').get(queueItemId) as { details_json: string } | undefined;
+    if (!row) return undefined;
+    try { return (JSON.parse(row.details_json) as { diagnosticPath?: string }).diagnosticPath; } catch { return undefined; }
+  }
+
   diagnostic(attemptId: string): string | undefined { return this.diagnosticPath(attemptId); }
   clearDiagnostic(attemptId: string): void { this.db.prepare('UPDATE publish_attempts SET diagnostic_path = NULL, diagnostic_created_at = NULL WHERE id = ?').run(attemptId); }
 

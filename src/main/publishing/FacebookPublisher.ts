@@ -3,7 +3,7 @@ import type { QueueRecord } from '@main/db/repositories/QueueRepository';
 import type { PublishingSettings } from '@shared/types';
 import { AppError } from '@main/errors';
 import { MediaStorageService } from '@main/services/MediaStorageService';
-import { FacebookComposerAdapter, type SubmissionEvidence } from './FacebookComposerAdapter';
+import { FacebookComposerAdapter, type PreflightDiagnosticCapture, type SubmissionEvidence } from './FacebookComposerAdapter';
 import type { PreflightResult } from '@shared/types';
 import { PublishingError } from './PublishingError';
 
@@ -30,10 +30,10 @@ export class FacebookPublisher {
     const result = await this.adapter.submit(page, composer, baseline, item.groupUrl, () => milestone('SUBMITTING'), (detail) => milestone('POST_CORRELATION', detail)); milestone('POST_CLICKED'); return result;
   }
 
-  async preflight(page: Page, item: QueueRecord, fillContent = false, settings?: PublishingSettings): Promise<PreflightResult> {
+  async preflight(page: Page, item: QueueRecord, fillContent = false, settings?: PublishingSettings, captureDiagnostic?: PreflightDiagnosticCapture): Promise<PreflightResult> {
     if (settings && item.media.some((asset) => asset.type === 'VIDEO') && (!Number.isInteger(settings.videoUploadTimeoutSeconds) || settings.videoUploadTimeoutSeconds < 60)) throw new PublishingError('MEDIA_UPLOAD_TIMEOUT', 'Video readiness timeout is invalid.');
     await this.validateMedia(item);
-    const result = await this.adapter.preflight(page, item, fillContent);
+    const result = await this.adapter.preflight(page, item, fillContent, captureDiagnostic);
     const mediaRequired = item.media.length > 0; const mediaInputFound = result.probe.mediaInput.status === 'FOUND';
     return { ...result.probe, queueItemId: item.id, snapshotHash: item.snapshotHash, accountReady: result.probe.session.status === 'FOUND', groupOpened: result.probe.group.status === 'FOUND', composerFound: result.probe.composerTrigger.status === 'FOUND', textboxFound: result.probe.composerTextbox.status === 'FOUND', mediaInputFound, mediaRequired, mediaValidated: true, postButtonFound: result.probe.postButton.status === 'FOUND', passed: result.probe.status === 'FOUND' && (!mediaRequired || mediaInputFound), filledContent: result.filledContent };
   }

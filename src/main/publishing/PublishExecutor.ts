@@ -66,9 +66,9 @@ export class PublishExecutor {
     const account = item.accountId ? this.accounts.get(item.accountId) : undefined; const group = item.groupId ? this.groups.get(item.groupId) : undefined;
     if (!account || !group || !group.active || !item.accountId || !item.groupId) throw new PublishingError('GROUP_UNAVAILABLE', 'The account/group target is no longer available.');
     this.profiles.assertControlledDirectory(account.profileDirectory);
-    const result = await this.browser.withAccountPage(account.id, (page) => this.publisher.preflight(page, item, fillContent, settings));
+    const result = await this.browser.withAccountPage(account.id, (page) => this.publisher.preflight(page, item, fillContent, settings, fillContent ? async (activePage, status) => this.diagnostics.capturePreflight(activePage, item.id, status) : undefined));
     this.attempts.recordSelectorProbe(result);
-    const preflight = { ...result, queueItemId: item.id, accountReady: result.session.status === 'FOUND', groupOpened: result.group.status === 'FOUND', composerFound: result.composerTrigger.status === 'FOUND', textboxFound: result.composerTextbox.status === 'FOUND', mediaInputFound: result.mediaInput.status === 'FOUND', postButtonFound: result.postButton.status === 'FOUND', passed: result.status === 'FOUND', filledContent: fillContent && result.composerTextbox.status === 'FOUND' };
+    const preflight = { ...result, queueItemId: item.id, accountReady: result.session.status === 'FOUND', groupOpened: result.group.status === 'FOUND', composerFound: result.composerTrigger.status === 'FOUND', textboxFound: result.composerTextbox.status === 'FOUND', mediaInputFound: result.mediaInput.status === 'FOUND', postButtonFound: result.postButton.status === 'FOUND', passed: result.status === 'FOUND', filledContent: fillContent ? Boolean(result.contentObserved) : false };
     this.attempts.recordPreflight(preflight); this.notifySafe(); return preflight;
   }
 

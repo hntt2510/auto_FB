@@ -20,6 +20,7 @@ export function registerPublishingIpc(service: PublishingService, allowedSenderI
     registerAuthorizedHandler('publishing:probe', allowedSenderIds, (_event, input: unknown) => { const value = parseOrThrow(groupOpenSchema.safeParse(input)); return service.probe(value.accountId, value.groupId); }),
     registerAuthorizedHandler('publishing:delete-diagnostic', allowedSenderIds, (_event, id: unknown) => service.deleteDiagnostic(parseOrThrow(queueIdSchema.safeParse(id)))),
     registerAuthorizedHandler('publishing:open-diagnostic', allowedSenderIds, (_event, id: unknown) => service.openDiagnostic(parseOrThrow(queueIdSchema.safeParse(id)))),
+    registerAuthorizedHandler('publishing:open-preflight-diagnostic', allowedSenderIds, (_event, id: unknown) => service.openPreflightDiagnostic(parseOrThrow(queueIdSchema.safeParse(id)))),
     registerAuthorizedHandler('publishing:live-readiness', allowedSenderIds, (_event, id: unknown) => service.evaluateLiveReadiness(parseOrThrow(queueIdSchema.safeParse(id)))),
     registerAuthorizedHandler('publishing:arm-scheduler', allowedSenderIds, (_event, input: unknown) => service.armScheduler(parseOrThrow(schedulerArmSchema.safeParse(input)).acknowledgeOverdue)),
     registerAuthorizedHandler('publishing:disarm-scheduler', allowedSenderIds, () => service.disarmScheduler()),

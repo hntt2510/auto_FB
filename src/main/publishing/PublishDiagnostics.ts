@@ -10,6 +10,13 @@ export function selectorDiagnosticSummary(probe: SelectorProbeResult, appVersion
   const fields = ['session', 'group', 'composerTrigger', 'composerTextbox', 'mediaInput', 'postButton', 'uploadBusy', 'approvalSignal', 'acceptanceSignal'] as const;
   const lines = ['appVersion=' + appVersion, 'selectorVersion=' + probe.selectorVersion, 'status=' + probe.status, 'timestamp=' + probe.checkedAt];
   for (const field of fields) lines.push(field + '=' + probe[field].status + (probe[field].count === undefined ? '' : ' count=' + probe[field].count));
+  if (probe.editorType) lines.push('editorType=' + probe.editorType);
+  if (probe.contentObserved !== undefined) lines.push('contentObserved=' + (probe.contentObserved ? 'YES' : 'NO'));
+  if (probe.observedContentLength !== undefined) lines.push('observedContentLength=' + probe.observedContentLength);
+  if (probe.expectedContentLength !== undefined) lines.push('expectedContentLength=' + probe.expectedContentLength);
+  if (probe.entryMethod) lines.push('entryMethod=' + probe.entryMethod);
+  if (probe.reason) lines.push('reason=' + probe.reason);
+  if (probe.diagnosticPath) lines.push('diagnosticPath=' + probe.diagnosticPath);
   if (probe.warnings.length) lines.push('warnings=' + probe.warnings.join(' | '));
   return lines.join('\n');
 }
@@ -20,6 +27,13 @@ export class PublishDiagnostics {
   async capture(page: Page, attemptId: string, errorCode: string): Promise<string | undefined> {
     try {
       const root = this.assertRoot(); const safeCode = errorCode.replace(/[^A-Z0-9_-]/gi, '_').slice(0, 60); const path = join(root, `${Date.now()}-${attemptId}-${safeCode}.png`);
+      await page.screenshot({ path, fullPage: false }); await this.prune(); return path;
+    } catch { return undefined; }
+  }
+
+  async capturePreflight(page: Page, queueId: string, status: SelectorProbeResult['status']): Promise<string | undefined> {
+    try {
+      const root = this.assertRoot(); const safeStatus = status.replace(/[^A-Z0-9_-]/gi, '_').slice(0, 20); const path = join(root, `${Date.now()}-preflight-${queueId}-${safeStatus}.png`);
       await page.screenshot({ path, fullPage: false }); await this.prune(); return path;
     } catch { return undefined; }
   }

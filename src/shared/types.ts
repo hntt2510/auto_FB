@@ -108,6 +108,10 @@ export type ApiErrorCode =
   | 'SCHEDULER_DISARMED'
   | 'OVERDUE_BACKLOG_ACK_REQUIRED'
   | 'PUBLISHING_STOPPED'
+  | 'SCHEDULER_INVALID_STATE'
+  | 'SESSION_JOB_LIMIT_REACHED'
+  | 'BACKUP_INVALID'
+  | 'RESTORE_NOT_SAFE'
   | 'UNKNOWN_ERROR';
 
 export type ApiError = { code: ApiErrorCode; message: string };
@@ -154,6 +158,7 @@ export type AccountApi = {
   healthCheck: (accountId: string) => Promise<HealthCheckResult>;
   delete: (input: DeleteAccountInput) => Promise<void>;
   openProfileFolder: (accountId: string) => Promise<void>;
+  operations: () => Promise<AccountOperationsSummary[]>;
   onChanged: (listener: (accounts: FacebookAccount[]) => void) => () => void;
 };
 
@@ -161,7 +166,7 @@ export type LogApi = {
   list: (filter?: LogFilter) => Promise<AuditLog[]>;
 };
 
-export type WindowApi = { accountApi: AccountApi; logApi: LogApi; groupApi: GroupApi; draftApi: DraftApi; queueApi: QueueApi; dashboardApi: DashboardApi; publishApi: PublishApi; settingsApi: PublishingSettingsApi };
+export type WindowApi = { accountApi: AccountApi; logApi: LogApi; groupApi: GroupApi; draftApi: DraftApi; queueApi: QueueApi; dashboardApi: DashboardApi; publishApi: PublishApi; settingsApi: PublishingSettingsApi; operationsApi: OperationsApi };
 export type AppBridge = { available: true; version: string };
 
 export type FacebookGroup = {
@@ -206,7 +211,7 @@ export type DialogCandidateSummary = { title?: string; newAfterTrigger?: boolean
 export type TextboxCandidateSummary = { strategy?: string; tag?: string; role?: string; contenteditable?: string; ariaLabel?: string; placeholder?: string; ariaMultiline?: string; lexicalEditor?: string; visible?: boolean; boundingBox?: { x: number; y: number; width: number; height: number }; focusable?: boolean; groupId?: number };
 export type SelectorProbeField = { status: SelectorProbeStatus; count?: number; enabled?: boolean; reason?: string };
 export type SelectorProbeResult = { id?: string; accountId: string; groupId: string; selectorVersion: string; status: SelectorProbeStatus; session: SelectorProbeField; group: SelectorProbeField; composerTrigger: SelectorProbeField; composerTextbox: SelectorProbeField; mediaInput: SelectorProbeField; postButton: SelectorProbeField; uploadBusy: SelectorProbeField; approvalSignal: SelectorProbeField; acceptanceSignal: SelectorProbeField; checkedAt: string; warnings: string[]; reason?: string; editorType?: ComposerEditorType; contentObserved?: boolean; observedContentLength?: number; expectedContentLength?: number; entryMethod?: ComposerEntryMethod; diagnosticPath?: string; triggerStrategy?: string; triggerCandidates?: TriggerCandidateSummary[]; textboxStrategy?: string; textboxCandidates?: TextboxCandidateSummary[]; createPostDialog?: SelectorProbeField; dialogTitle?: string; dialogCandidates?: DialogCandidateSummary[]; rawEditorCount?: number; logicalEditorCount?: number };
-export type PreflightResult = SelectorProbeResult & { queueItemId: string; snapshotHash?: string; accountReady: boolean; groupOpened: boolean; composerFound: boolean; textboxFound: boolean; mediaInputFound?: boolean; mediaRequired?: boolean; mediaValidated?: boolean; postButtonFound: boolean; passed: boolean; filledContent: boolean };
+export type PreflightResult = SelectorProbeResult & { queueItemId: string; snapshotHash?: string; accountReady: boolean; groupOpened: boolean; composerFound: boolean; textboxFound: boolean; mediaInputFound?: boolean; mediaRequired?: boolean; mediaValidated?: boolean; mediaReport?: MediaPreflightReport; postButtonFound: boolean; passed: boolean; filledContent: boolean };
 export type ReconciliationAction = 'MARK_SUBMITTED' | 'MARK_VERIFIED';
 export type ReconciliationRecord = { id: string; queueItemId: string; attemptId?: string; action: ReconciliationAction; evidence: string; createdAt: string };
 export type PublishAttemptEvent = { id: string; attemptId: string; sequence: number; eventType: string; message?: string; createdAt: string };
@@ -231,6 +236,7 @@ export type QueueItem = {
   submittedAt?: string;
   completedAt?: string;
   latestAttempt?: PublishAttemptSummary;
+  outcome?: QueueOutcomeSummary;
   media: Array<Pick<DraftMedia, 'id' | 'type' | 'originalName' | 'mimeType' | 'fileSize' | 'sortOrder' | 'previewUrl'>>;
   createdAt: string;
   updatedAt: string;
@@ -241,6 +247,14 @@ export type QueueBatchInput = { draftId: string; targets: QueueTarget[]; schedul
 export type QueueValidationIssue = { target?: QueueTarget; code: string; message: string };
 export type QueuePreview = { draft: Pick<Draft, 'id' | 'title' | 'body' | 'linkUrl' | 'media'>; targets: Array<QueueTarget & { accountName: string; groupName: string; groupUrl: string }>; scheduledAt?: string; issues: QueueValidationIssue[]; duplicateTargets: QueueTarget[] };
 export type QueueState = { id: string; status: QueueStatus };
+export type QueueOutcomeSummary = { finalStatus: QueueStatus; automatedResult?: PublishReceiptResult | 'FAILED'; verificationSource: 'AUTOMATED' | 'OPERATOR' | 'NONE'; reconciliationAction?: ReconciliationAction };
+export type QueueBatchAction = 'PAUSE' | 'RESUME' | 'CANCEL';
+export type QueueRescheduleMode = 'SET_TIME' | 'SHIFT' | 'CLEAR';
+export type QueueBatchActionInput = { queueIds: string[]; action: QueueBatchAction };
+export type QueueBatchRescheduleInput = { queueIds: string[]; mode: QueueRescheduleMode; scheduledAt?: string; shiftMinutes?: number };
+export type PlannerBucket = 'TODAY' | 'TOMORROW' | 'LATER' | 'UNSCHEDULED';
+export type PlannerItem = QueueItem & { bucket: PlannerBucket; accountScheduleConflict: boolean };
+export type PlannerSummary = { generatedAt: string; conflictWindowMinutes: number; buckets: Record<PlannerBucket, Array<{ accountId?: string; accountName: string; items: PlannerItem[] }>> };
 
 export type DashboardSummary = {
   accounts: { total: number; ready: number; loginRequired: number; checkpoint: number; error: number };
@@ -248,6 +262,10 @@ export type DashboardSummary = {
   drafts: { ready: number; total: number };
   queue: { active: number; due: number; cancelled: number };
   publishing: { enabled: boolean; running: number; succeededToday: number; failedToday: number; needsAttention: number };
+  today: { scheduled: number; due: number; running: number; submitted: number; succeeded: number; failed: number; needsAttention: number };
+  accountStatuses: { ready: number; loginRequired: number; checkpoint: number; blocked: number; unknown: number };
+  recentPublishing: PublishingHistoryRow[];
+  attention: QueueItem[];
   recentQueue: QueueItem[];
   recentLogs: AuditLog[];
 };
@@ -266,6 +284,8 @@ export type GroupApi = {
   accountGroups: (accountId: string) => Promise<FacebookGroup[]>;
   replaceAccountGroups: (accountId: string, groupIds: string[]) => Promise<FacebookGroup[]>;
   open: (groupId: string, accountId: string) => Promise<GroupOpenResult>;
+  operations: () => Promise<GroupOperationsSummary[]>;
+  assignmentMatrix: () => Promise<AssignmentMatrix>;
 };
 
 export type DraftApi = {
@@ -291,17 +311,23 @@ export type QueueApi = {
   resume: (queueId: string) => Promise<QueueItem>;
   cancel: (queueId: string) => Promise<QueueItem>;
   delete: (queueId: string) => Promise<void>;
+  planner: () => Promise<PlannerSummary>;
+  batchAction: (input: QueueBatchActionInput) => Promise<QueueItem[]>;
+  batchReschedule: (input: QueueBatchRescheduleInput) => Promise<QueueItem[]>;
 };
 
 export type DashboardApi = { summary: () => Promise<DashboardSummary> };
 
-export type PublishingSettings = { enabled: boolean; executionMode: ExecutionMode; schedulerIntervalSeconds: number; maxConcurrentAccounts: number; videoUploadTimeoutSeconds: number; canaryMode?: boolean };
+export type PublishingSettings = { enabled: boolean; executionMode: ExecutionMode; schedulerIntervalSeconds: number; maxConcurrentAccounts: number; videoUploadTimeoutSeconds: number; maxJobsPerSchedulerSession: number; canaryMode?: boolean };
 export type PublishingBlock = { accountId: string; accountName: string; reason: 'LOGIN_REQUIRED' | 'CHECKPOINT'; message: string; blockedAt: string };
 export type PublishingRunResult = { requested: number; claimed: number; completed: number; skipped: number };
 export type PublishingReadiness = 'NOT_READY' | 'PREFLIGHT_READY' | 'LIVE_ENABLED' | 'DEGRADED';
 export type LiveReadinessReason = 'ENGINE_DISABLED' | 'NOT_LIVE_MODE' | 'ACCOUNT_BLOCKED' | 'ACCOUNT_LOGIN_REQUIRED' | 'ACCOUNT_CHECKPOINT' | 'GROUP_INACTIVE' | 'ASSIGNMENT_MISSING' | 'PREFLIGHT_MISSING' | 'PREFLIGHT_EXPIRED' | 'PREFLIGHT_SELECTOR_VERSION_MISMATCH' | 'PREFLIGHT_SNAPSHOT_MISMATCH' | 'MEDIA_INVALID';
 export type LiveReadiness = { ready: true; preflightId: string } | { ready: false; reasons: LiveReadinessReason[] };
-export type PublishingEngineStatus = { settings: PublishingSettings; schedulerRunning: boolean; schedulerArmed: boolean; tickRunning: boolean; running: QueueItem[]; blockedAccounts: PublishingBlock[]; recentAttempts: PublishAttemptSummary[]; dueCount: number; overdueCount: number; selectorVersion: string; readiness: PublishingReadiness; recentProbes: SelectorProbeResult[] };
+export type SchedulerRuntimeState = 'DISARMED' | 'ARMED' | 'STOPPING';
+export type SchedulerStopReason = 'OPERATOR_DISARMED' | 'STOP_AFTER_CURRENT' | 'SESSION_JOB_LIMIT_REACHED' | 'APPLICATION_SHUTDOWN';
+export type SchedulerArmPreview = { dueJobs: number; overdueJobs: number; oldestOverdueAt?: string; accountsInvolved: number; groupsInvolved: number; executionMode: ExecutionMode; canaryMode: boolean; sessionLimit: number };
+export type PublishingEngineStatus = { settings: PublishingSettings; schedulerRunning: boolean; schedulerArmed: boolean; schedulerState: SchedulerRuntimeState; schedulerReason?: SchedulerStopReason; sessionCompleted: number; sessionLimit: number; armPreview: SchedulerArmPreview; tickRunning: boolean; running: QueueItem[]; blockedAccounts: PublishingBlock[]; recentAttempts: PublishAttemptSummary[]; dueCount: number; overdueCount: number; selectorVersion: string; readiness: PublishingReadiness; recentProbes: SelectorProbeResult[] };
 export type RequeueInput = { queueId: string; scheduledAt?: string };
 
 export type PublishApi = {
@@ -325,6 +351,7 @@ export type PublishApi = {
   armScheduler: (acknowledgeOverdue?: boolean) => Promise<PublishingEngineStatus>;
   disarmScheduler: () => Promise<PublishingEngineStatus>;
   stopPublishing: () => Promise<PublishingEngineStatus>;
+  stopAfterCurrent: () => Promise<PublishingEngineStatus>;
   exportReport: () => Promise<string | undefined>;
   onChanged: (listener: () => void) => () => void;
 };
@@ -332,4 +359,20 @@ export type PublishApi = {
 export type PublishingSettingsUpdate = PublishingSettings & { confirmLive?: boolean };
 export type PublishingSettingsApi = { getPublishing: () => Promise<PublishingSettings>; updatePublishing: (input: PublishingSettingsUpdate) => Promise<PublishingSettings> };
 
-export type WorkspaceApi = { groupApi: GroupApi; draftApi: DraftApi; queueApi: QueueApi; dashboardApi: DashboardApi; publishApi: PublishApi; settingsApi: PublishingSettingsApi };
+export type OperationalHealthStatus = 'READY' | 'LOGIN_REQUIRED' | 'CHECKPOINT' | 'PROXY_ERROR' | 'BROWSER_ERROR' | 'BLOCKED' | 'UNKNOWN';
+export type AccountOperationsSummary = { accountId: string; accountName: string; browser: string; facebookSession: OperationalHealthStatus; publishingBlock?: PublishingBlock; proxyConfigured: boolean; lastSuccessfulPublish?: string; lastFailure?: string; pendingQueue: number; dueQueue: number; needsAttention: number };
+export type GroupOperationsSummary = { groupId: string; groupName: string; status: 'ACTIVE' | 'ARCHIVED' | 'NEEDS_ATTENTION'; lastOpened?: string; lastSuccessfulPublish?: string; lastFailedPublish?: string; lastAccountUsed?: string; activeQueueCount: number };
+export type AssignmentMatrix = { accounts: Array<{ id: string; name: string }>; groups: Array<{ id: string; name: string }>; assignments: Array<{ accountId: string; groupId: string }> };
+export type PublishHistoryFilter = { from?: string; to?: string; accountId?: string; groupId?: string; outcome?: string; verificationSource?: 'AUTOMATED' | 'OPERATOR' | 'NONE'; search?: string };
+export type PublishingHistoryRow = { timestamp: string; queueId: string; accountId?: string; groupId?: string; accountName: string; groupName: string; draftTitle: string; automatedResult?: PublishReceiptResult | 'FAILED'; finalStatus: QueueStatus; verificationSource: 'AUTOMATED' | 'OPERATOR' | 'NONE'; reconciliationAction?: ReconciliationAction; errorCode?: string; postUrl?: string };
+export type MediaPreparationState = 'VALID' | 'MISSING' | 'INVALID_SIGNATURE' | 'UNSUPPORTED' | 'READY_FOR_UPLOAD' | 'UPLOAD_PENDING';
+export type MediaPreflightItem = { id: string; originalName: string; type: MediaType; sortOrder: number; state: MediaPreparationState; managedPath: boolean; signature: boolean; exists: boolean; facebookMediaInput?: 'FOUND' | 'MISSING' | 'NOT_TESTED'; reason?: string };
+export type MediaPreflightReport = { count: number; ready: boolean; items: MediaPreflightItem[] };
+export type BackupKind = 'MANUAL' | 'MIGRATION' | 'PRE_RESTORE';
+export type BackupInfo = { id: string; kind: BackupKind; createdAt: string; size: number; schemaVersion: number };
+export type StorageUsage = { database: number; profiles: number; media: number; diagnostics: number; backups: number; calculatedAt: string };
+export type OrphanMediaScan = { candidateIds: string[]; candidateCount: number; totalBytes: number; scannedAt: string };
+export type AboutInfo = { appName: string; appVersion: string; databaseSchema: number; selectorVersion: string; electronVersion: string; playwrightVersion: string };
+export type OperationsApi = { history: (filter?: PublishHistoryFilter) => Promise<PublishingHistoryRow[]>; exportHistoryCsv: (filter?: PublishHistoryFilter) => Promise<string | undefined>; listBackups: () => Promise<BackupInfo[]>; createBackup: () => Promise<BackupInfo>; restoreBackup: (backupId: string) => Promise<void>; storageUsage: () => Promise<StorageUsage>; cleanDiagnostics: () => Promise<number>; scanOrphanMedia: () => Promise<OrphanMediaScan>; cleanOrphanMedia: (candidateIds: string[]) => Promise<number>; about: () => Promise<AboutInfo> };
+
+export type WorkspaceApi = { groupApi: GroupApi; draftApi: DraftApi; queueApi: QueueApi; dashboardApi: DashboardApi; publishApi: PublishApi; settingsApi: PublishingSettingsApi; operationsApi: OperationsApi };

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
-import type { ExecutionMode, PreflightResult, PublishAttempt, PublishAttemptEvent, PublishAttemptStatus, PublishAttemptSummary, PublishReceipt, PublishReceiptResult, PublishingBlock, ReconciliationAction, ReconciliationRecord, SelectorProbeResult } from '@shared/types';
+import type { ExecutionMode, PreflightResult, PublishAttempt, PublishAttemptEvent, PublishAttemptStatus, PublishAttemptSummary, PublishHistoryFilter, PublishingHistoryRow, PublishReceipt, PublishReceiptResult, PublishingBlock, ReconciliationAction, ReconciliationRecord, SelectorProbeResult } from '@shared/types';
 
 type AttemptRow = { id: string; queue_item_id: string; account_id: string | null; group_id: string | null; attempt_number: number; status: PublishAttemptStatus; error_code: string | null; error_message: string | null; diagnostic_path: string | null; diagnostic_created_at: string | null; execution_mode: ExecutionMode; selector_version: string | null; preflight: number; started_at: string; finished_at: string | null; created_at: string };
 type EventRow = { id: string; attempt_id: string; sequence: number; event_type: string; message: string | null; created_at: string };
@@ -120,6 +120,30 @@ export class PublishRepository {
     const rows = this.db.prepare(`SELECT pa.*, pr.result FROM publish_attempts pa LEFT JOIN publish_receipts pr ON pr.attempt_id = pa.id ORDER BY pa.started_at DESC LIMIT ?`).all(limit) as Array<AttemptRow & { result: PublishReceiptResult | null }>;
     return rows.map((row) => ({ id: row.id, queueItemId: row.queue_item_id, accountId: row.account_id ?? undefined, groupId: row.group_id ?? undefined, attemptNumber: row.attempt_number, status: row.status, errorCode: row.error_code ?? undefined, errorMessage: row.error_message ?? undefined, startedAt: row.started_at, finishedAt: row.finished_at ?? undefined, irreversibleReached: this.irreversibleReached(row.id, row.status), result: row.result ?? undefined, executionMode: row.execution_mode, selectorVersion: row.selector_version ?? undefined, preflight: Boolean(row.preflight) }));
   }
+
+  history(filter: PublishHistoryFilter = {}, limit = 1000): PublishingHistoryRow[] {
+    const conditions: string[] = []; const params: Record<string, string | number> = { limit };
+    if (filter.from) { conditions.push('COALESCE(pa.finished_at, q.updated_at) >= @from'); params.from = filter.from; }
+    if (filter.to) { conditions.push('COALESCE(pa.finished_at, q.updated_at) <= @to'); params.to = filter.to; }
+    if (filter.accountId) { conditions.push('q.account_id = @accountId'); params.accountId = filter.accountId; }
+    if (filter.groupId) { conditions.push('q.group_id = @groupId'); params.groupId = filter.groupId; }
+    if (filter.search) { conditions.push('(q.account_name_snapshot LIKE @search OR q.group_name_snapshot LIKE @search OR q.draft_title_snapshot LIKE @search OR q.id LIKE @search)'); params.search = `%${filter.search}%`; }
+    if (filter.outcome) { conditions.push('(q.status = @outcome OR pr.result = @outcome OR pa.status = @outcome)'); params.outcome = filter.outcome; }
+    if (filter.verificationSource === 'OPERATOR') conditions.push("(pr.verification_source = 'OPERATOR' OR rx.action = 'MARK_VERIFIED')");
+    if (filter.verificationSource === 'AUTOMATED') conditions.push("(pr.result = 'VERIFIED_PUBLISHED' AND IFNULL(pr.verification_source, 'AUTOMATED') = 'AUTOMATED' AND rx.action IS NULL)");
+    if (filter.verificationSource === 'NONE') conditions.push("(pr.result IS NULL OR pr.result <> 'VERIFIED_PUBLISHED') AND rx.action IS NULL");
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    type HistoryRow = { timestamp: string; queue_id: string; account_id: string | null; group_id: string | null; account_name: string; group_name: string; draft_title: string; final_status: PublishingHistoryRow['finalStatus']; automated_result: PublishReceiptResult | null; attempt_status: PublishAttemptStatus | null; verification_source: 'AUTOMATED' | 'OPERATOR' | null; reconciliation_action: ReconciliationAction | null; error_code: string | null; post_url: string | null };
+    const rows = this.db.prepare(`SELECT COALESCE(pa.finished_at, q.updated_at) AS timestamp, q.id AS queue_id, q.account_id, q.group_id, q.account_name_snapshot AS account_name, q.group_name_snapshot AS group_name, q.draft_title_snapshot AS draft_title, q.status AS final_status, pr.result AS automated_result, pa.status AS attempt_status, pr.verification_source, rx.action AS reconciliation_action, pa.error_code, pr.post_url
+      FROM queue_items q
+      LEFT JOIN publish_attempts pa ON pa.id = (SELECT p2.id FROM publish_attempts p2 WHERE p2.queue_item_id = q.id ORDER BY p2.attempt_number DESC LIMIT 1)
+      LEFT JOIN publish_receipts pr ON pr.attempt_id = pa.id
+      LEFT JOIN publish_reconciliations rx ON rx.id = (SELECT r2.id FROM publish_reconciliations r2 WHERE r2.queue_item_id = q.id ORDER BY r2.created_at DESC LIMIT 1)
+      ${where} ORDER BY timestamp DESC LIMIT @limit`).all(params) as HistoryRow[];
+    return rows.map((row) => ({ timestamp: row.timestamp, queueId: row.queue_id, accountId: row.account_id ?? undefined, groupId: row.group_id ?? undefined, accountName: row.account_name, groupName: row.group_name, draftTitle: row.draft_title, automatedResult: row.automated_result ?? (row.attempt_status === 'FAILED' ? 'FAILED' : undefined), finalStatus: row.final_status, verificationSource: row.reconciliation_action === 'MARK_VERIFIED' || row.verification_source === 'OPERATOR' ? 'OPERATOR' : row.automated_result === 'VERIFIED_PUBLISHED' ? 'AUTOMATED' : 'NONE', reconciliationAction: row.reconciliation_action ?? undefined, errorCode: row.error_code ?? undefined, postUrl: row.post_url ?? undefined }));
+  }
+
+  activePublishingCount(): number { return (this.db.prepare("SELECT COUNT(*) AS count FROM queue_items WHERE status = 'RUNNING'").get() as { count: number }).count; }
 
   recoverRunning(reason: string): number {
     return this.db.transaction(() => {

@@ -6,6 +6,7 @@ import { parseOrThrow, registerAuthorizedHandler } from './authorized';
 export function registerIpc(service: AccountService, allowedSenderIds: () => ReadonlySet<number>): () => void {
   const cleanups = [
     registerAuthorizedHandler('accounts:list', allowedSenderIds, () => service.list()),
+    registerAuthorizedHandler('accounts:operations', allowedSenderIds, () => service.operations()),
     registerAuthorizedHandler('accounts:create', allowedSenderIds, (_event, input: unknown) => service.create(parseOrThrow(createAccountSchema.safeParse(input)))),
     registerAuthorizedHandler('accounts:update', allowedSenderIds, (_event, input: unknown) => service.update(parseOrThrow(updateAccountSchema.safeParse(input)))),
     registerAuthorizedHandler('accounts:open', allowedSenderIds, (_event, id: unknown) => service.open(parseOrThrow(accountIdSchema.safeParse(id)))),

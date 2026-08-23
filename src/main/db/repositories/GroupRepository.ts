@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
-import type { AssignmentAccount, FacebookGroup, GroupFilter, GroupInput } from '@shared/types';
+import type { AssignmentAccount, AssignmentMatrix, FacebookGroup, GroupFilter, GroupInput, GroupOperationsSummary } from '@shared/types';
 import { normalizeFacebookGroupUrl, normalizeTags } from '@shared/groupUrl';
 
 type GroupRow = { id: string; name: string; url: string; normalized_url: string; facebook_group_id: string | null; notes: string | null; active: number; assigned_accounts_count: number; tags: string | null; created_at: string; updated_at: string };
@@ -120,6 +120,25 @@ export class GroupRepository {
 
   hasActiveQueueItems(id: string): boolean {
     return Boolean(this.db.prepare("SELECT 1 FROM queue_items WHERE group_id = ? AND status IN ('PENDING', 'PAUSED', 'RUNNING', 'NEEDS_ATTENTION') LIMIT 1").get(id));
+  }
+
+  operations(): GroupOperationsSummary[] {
+    const rows = this.db.prepare(`SELECT g.id, g.name, g.active,
+      (SELECT MAX(created_at) FROM audit_logs al WHERE al.event_type = 'GROUP_OPENED' AND CASE WHEN json_valid(al.metadata) THEN json_extract(al.metadata, '$.groupId') END = g.id) AS last_opened,
+      (SELECT MAX(completed_at) FROM queue_items q WHERE q.group_id = g.id AND q.status = 'SUCCEEDED') AS last_success,
+      (SELECT MAX(COALESCE(completed_at, updated_at)) FROM queue_items q WHERE q.group_id = g.id AND q.status IN ('FAILED','NEEDS_ATTENTION')) AS last_failure,
+      (SELECT account_name_snapshot FROM queue_items q WHERE q.group_id = g.id AND q.status IN ('RUNNING','SUBMITTED','SUCCEEDED','FAILED','NEEDS_ATTENTION') ORDER BY q.updated_at DESC LIMIT 1) AS last_account,
+      (SELECT COUNT(*) FROM queue_items q WHERE q.group_id = g.id AND q.status IN ('PENDING','PAUSED','RUNNING','NEEDS_ATTENTION')) AS active_queue,
+      EXISTS(SELECT 1 FROM queue_items q WHERE q.group_id = g.id AND (q.status = 'NEEDS_ATTENTION' OR (q.status = 'FAILED' AND q.updated_at >= datetime('now', '-7 days')))) AS attention
+      FROM groups g ORDER BY g.name COLLATE NOCASE`).all() as Array<{ id: string; name: string; active: number; last_opened: string | null; last_success: string | null; last_failure: string | null; last_account: string | null; active_queue: number; attention: number }>;
+    return rows.map((row) => ({ groupId: row.id, groupName: row.name, status: row.attention ? 'NEEDS_ATTENTION' : row.active ? 'ACTIVE' : 'ARCHIVED', lastOpened: row.last_opened ?? undefined, lastSuccessfulPublish: row.last_success ?? undefined, lastFailedPublish: row.last_failure ?? undefined, lastAccountUsed: row.last_account ?? undefined, activeQueueCount: row.active_queue }));
+  }
+
+  assignmentMatrix(): AssignmentMatrix {
+    const accounts = this.db.prepare('SELECT id, name FROM accounts ORDER BY name COLLATE NOCASE').all() as Array<{ id: string; name: string }>;
+    const groups = this.db.prepare('SELECT id, name FROM groups ORDER BY name COLLATE NOCASE').all() as Array<{ id: string; name: string }>;
+    const assignments = this.db.prepare('SELECT account_id AS accountId, group_id AS groupId FROM account_groups WHERE enabled = 1 ORDER BY account_id, group_id').all() as Array<{ accountId: string; groupId: string }>;
+    return { accounts, groups, assignments };
   }
 
   delete(id: string): void { this.db.prepare('DELETE FROM groups WHERE id = ?').run(id); }

@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import type { QueueFilter, QueueItem, QueueStatus, MediaType } from '@shared/types';
+import type { QueueBatchAction, QueueBatchRescheduleInput, QueueFilter, QueueItem, QueueStatus, MediaType, ReconciliationAction } from '@shared/types';
 
 export type QueueMediaRecord = { id: string; type: MediaType; originalName: string; storedName: string; localPath: string; mimeType?: string; fileSize: number; sortOrder: number };
 export type QueueRecord = Omit<QueueItem, 'media' | 'draftId' | 'accountId' | 'groupId'> & { draftId?: string; accountId?: string; groupId?: string; snapshotHash: string; media: QueueMediaRecord[] };
@@ -77,6 +77,35 @@ export class QueueRepository {
 
   dueCount(now: string): number { return (this.db.prepare("SELECT COUNT(*) AS count FROM queue_items WHERE status = 'PENDING' AND scheduled_at IS NOT NULL AND scheduled_at <= ?").get(now) as { count: number }).count; }
 
+  dueSummary(now: string): { count: number; oldest?: string; accounts: number; groups: number } {
+    const row = this.db.prepare("SELECT COUNT(*) AS count, MIN(scheduled_at) AS oldest, COUNT(DISTINCT account_id) AS accounts, COUNT(DISTINCT group_id) AS groups FROM queue_items WHERE status = 'PENDING' AND scheduled_at IS NOT NULL AND scheduled_at <= ?").get(now) as { count: number; oldest: string | null; accounts: number; groups: number };
+    return { count: row.count, oldest: row.oldest ?? undefined, accounts: row.accounts, groups: row.groups };
+  }
+
+  batchAction(ids: string[], action: QueueBatchAction): QueueRecord[] {
+    const unique = [...new Set(ids)]; if (!unique.length) throw new Error('At least one queue item is required.');
+    const allowed: Record<QueueBatchAction, QueueStatus[]> = { PAUSE: ['PENDING'], RESUME: ['PAUSED'], CANCEL: ['PENDING', 'PAUSED', 'NEEDS_ATTENTION'] };
+    const target: Record<QueueBatchAction, QueueStatus> = { PAUSE: 'PAUSED', RESUME: 'PENDING', CANCEL: 'CANCELLED' };
+    this.db.transaction(() => {
+      const placeholders = unique.map(() => '?').join(','); const rows = this.db.prepare(`SELECT id, status FROM queue_items WHERE id IN (${placeholders})`).all(...unique) as Array<{ id: string; status: QueueStatus }>;
+      if (rows.length !== unique.length || rows.some((row) => !allowed[action].includes(row.status))) throw new Error('Batch contains a missing item or invalid state. No items were changed.');
+      const now = new Date().toISOString(); const update = this.db.prepare('UPDATE queue_items SET status = ?, updated_at = ? WHERE id = ?'); for (const id of unique) update.run(target[action], now, id);
+    })();
+    return unique.map((id) => this.get(id)!);
+  }
+
+  batchReschedule(input: QueueBatchRescheduleInput): QueueRecord[] {
+    const unique = [...new Set(input.queueIds)]; if (!unique.length) throw new Error('At least one queue item is required.');
+    this.db.transaction(() => {
+      const placeholders = unique.map(() => '?').join(','); const rows = this.db.prepare(`SELECT id, status, scheduled_at FROM queue_items WHERE id IN (${placeholders})`).all(...unique) as Array<{ id: string; status: QueueStatus; scheduled_at: string | null }>;
+      if (rows.length !== unique.length || rows.some((row) => !['PENDING', 'PAUSED'].includes(row.status))) throw new Error('Only pending or paused items may be rescheduled. No items were changed.');
+      if (input.mode === 'SHIFT' && rows.some((row) => !row.scheduled_at)) throw new Error('Unscheduled items cannot be shifted. No items were changed.');
+      const now = new Date().toISOString(); const update = this.db.prepare('UPDATE queue_items SET scheduled_at = ?, updated_at = ? WHERE id = ?');
+      for (const row of rows) { const scheduled = input.mode === 'CLEAR' ? null : input.mode === 'SET_TIME' ? input.scheduledAt! : new Date(new Date(row.scheduled_at!).getTime() + input.shiftMinutes! * 60_000).toISOString(); update.run(scheduled, now, row.id); }
+    })();
+    return unique.map((id) => this.get(id)!);
+  }
+
   claim(id: string, token: string, timestamp: string): boolean {
     return this.db.prepare("UPDATE queue_items SET status = 'RUNNING', execution_token = ?, lease_started_at = ?, attention_reason = NULL, updated_at = ? WHERE id = ? AND status = 'PENDING' AND execution_token IS NULL")
       .run(token, timestamp, timestamp, id).changes === 1;
@@ -139,10 +168,11 @@ export class QueueRepository {
 
   private attachLatest(rows: QueueRecord[]): QueueRecord[] {
     if (!rows.length) return rows; const placeholders = rows.map(() => '?').join(',');
-    const latest = this.db.prepare(`SELECT pa.*, pr.result, EXISTS (SELECT 1 FROM publish_attempt_events pae WHERE pae.attempt_id = pa.id AND pae.event_type IN ('SUBMITTING', 'POST_CLICKED', 'SUBMITTED', 'VERIFIED')) AS irreversible
+    const latest = this.db.prepare(`SELECT pa.*, pr.result, pr.verification_source, (SELECT action FROM publish_reconciliations px WHERE px.queue_item_id = pa.queue_item_id ORDER BY px.created_at DESC LIMIT 1) AS reconciliation_action, EXISTS (SELECT 1 FROM publish_attempt_events pae WHERE pae.attempt_id = pa.id AND pae.event_type IN ('SUBMITTING', 'POST_CLICKED', 'SUBMITTED', 'VERIFIED')) AS irreversible
       FROM publish_attempts pa LEFT JOIN publish_receipts pr ON pr.attempt_id = pa.id
-      JOIN (SELECT queue_item_id, MAX(attempt_number) AS attempt_number FROM publish_attempts WHERE queue_item_id IN (${placeholders}) GROUP BY queue_item_id) x ON x.queue_item_id = pa.queue_item_id AND x.attempt_number = pa.attempt_number`).all(...rows.map((row) => row.id)) as Array<{ id: string; queue_item_id: string; account_id: string | null; group_id: string | null; attempt_number: number; status: import('@shared/types').PublishAttemptStatus; error_code: string | null; error_message: string | null; execution_mode: import('@shared/types').ExecutionMode; selector_version: string | null; preflight: number; started_at: string; finished_at: string | null; result: import('@shared/types').PublishReceiptResult | null; irreversible: number }>;
+      JOIN (SELECT queue_item_id, MAX(attempt_number) AS attempt_number FROM publish_attempts WHERE queue_item_id IN (${placeholders}) GROUP BY queue_item_id) x ON x.queue_item_id = pa.queue_item_id AND x.attempt_number = pa.attempt_number`).all(...rows.map((row) => row.id)) as Array<{ id: string; queue_item_id: string; account_id: string | null; group_id: string | null; attempt_number: number; status: import('@shared/types').PublishAttemptStatus; error_code: string | null; error_message: string | null; execution_mode: import('@shared/types').ExecutionMode; selector_version: string | null; preflight: number; started_at: string; finished_at: string | null; result: import('@shared/types').PublishReceiptResult | null; verification_source: 'AUTOMATED' | 'OPERATOR' | null; reconciliation_action: ReconciliationAction | null; irreversible: number }>;
     const byQueue = new Map(latest.map((row) => [row.queue_item_id, { id: row.id, queueItemId: row.queue_item_id, accountId: row.account_id ?? undefined, groupId: row.group_id ?? undefined, attemptNumber: row.attempt_number, status: row.status, errorCode: row.error_code ?? undefined, errorMessage: row.error_message ?? undefined, startedAt: row.started_at, finishedAt: row.finished_at ?? undefined, irreversibleReached: Boolean(row.irreversible), result: row.result ?? undefined, executionMode: row.execution_mode, selectorVersion: row.selector_version ?? undefined, preflight: Boolean(row.preflight) }]));
-    return rows.map((row) => ({ ...row, latestAttempt: byQueue.get(row.id) }));
+    const detail = new Map(latest.map((row) => [row.queue_item_id, row]));
+    return rows.map((row) => { const value = detail.get(row.id); const automatedResult = value?.result ?? (value?.status === 'FAILED' ? 'FAILED' : undefined); const verificationSource = value?.reconciliation_action === 'MARK_VERIFIED' || value?.verification_source === 'OPERATOR' ? 'OPERATOR' : automatedResult === 'VERIFIED_PUBLISHED' ? 'AUTOMATED' : 'NONE'; return { ...row, latestAttempt: byQueue.get(row.id), outcome: { finalStatus: row.status, automatedResult, verificationSource, reconciliationAction: value?.reconciliation_action ?? undefined } }; });
   }
 }

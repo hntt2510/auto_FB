@@ -3,7 +3,7 @@ import { copyFile, mkdir, open, rm, stat, lstat } from 'node:fs/promises';
 import { existsSync, lstatSync, mkdirSync, realpathSync } from 'node:fs';
 import { basename, extname, join, relative, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { MediaType } from '@shared/types';
+import type { MediaPreflightItem, MediaPreflightReport, MediaType } from '@shared/types';
 import { AppError } from '@main/errors';
 
 export const IMAGE_MAX_BYTES = 25 * 1024 * 1024;
@@ -57,10 +57,22 @@ export class MediaStorageService {
   }
 
   async validateManagedFile(filePath: string, type: MediaType): Promise<string> {
-    const target = this.assertManagedPath(filePath); const extension = extname(target).toLowerCase(); const handle = await open(target, 'r'); const signature = Buffer.alloc(16);
+    const target = this.assertManagedPath(filePath); const extension = extname(target).toLowerCase(); const supported = type === 'IMAGE' ? IMAGE_EXTENSIONS.has(extension) : VIDEO_EXTENSIONS.has(extension); if (!supported) throw new AppError('MEDIA_INVALID', 'Managed media format is unsupported.');
+    const info = await stat(target); const maximum = type === 'IMAGE' ? IMAGE_MAX_BYTES : VIDEO_MAX_BYTES; if (!info.size || info.size > maximum) throw new AppError('MEDIA_INVALID', 'Managed media size is invalid.'); const handle = await open(target, 'r'); const signature = Buffer.alloc(16);
     try { await handle.read(signature, 0, signature.length, 0); } finally { await handle.close(); }
     if (!hasValidSignature(type, extension, signature)) throw new AppError('MEDIA_INVALID', 'Managed media signature is invalid.');
     return target;
+  }
+
+  async preflightReport(assets: Array<{ id: string; type: MediaType; originalName: string; localPath: string; sortOrder: number }>): Promise<MediaPreflightReport> {
+    const items: MediaPreflightItem[] = [];
+    for (const asset of assets.slice().sort((a, b) => a.sortOrder - b.sortOrder)) {
+      let exists = false; let managedPath = false; let signature = false; let state: MediaPreflightItem['state'] = 'MISSING'; let reason: string | undefined;
+      try { exists = existsSync(asset.localPath); const path = this.assertManagedPath(asset.localPath); managedPath = true; await this.validateManagedFile(path, asset.type); signature = true; state = 'READY_FOR_UPLOAD'; }
+      catch (error) { reason = error instanceof Error ? error.message : 'Media validation failed.'; state = !exists ? 'MISSING' : !managedPath ? 'UNSUPPORTED' : 'INVALID_SIGNATURE'; }
+      items.push({ id: asset.id, originalName: asset.originalName, type: asset.type, sortOrder: asset.sortOrder, state, managedPath, signature, exists, facebookMediaInput: 'NOT_TESTED', reason });
+    }
+    return { count: items.length, ready: items.every((item) => item.state === 'READY_FOR_UPLOAD'), items };
   }
 
   previewUrl(assetId: string): string { return `app-media://asset/${encodeURIComponent(assetId)}`; }

@@ -7,7 +7,7 @@ import type { BrowserManager } from '@main/browser/BrowserManager';
 import { AppError } from '@main/errors';
 import { normalizeFacebookGroupUrl, normalizeTags, parseGroupImportLine } from '@shared/groupUrl';
 import { accountIdSchema, groupFilterSchema, groupIdSchema, groupInputSchema, groupImportSchema } from '@shared/schemas';
-import type { AssignmentAccount, FacebookGroup, GroupFilter, GroupImportPreview, GroupImportResult, GroupInput, GroupOpenResult } from '@shared/types';
+import type { AssignmentAccount, AssignmentMatrix, FacebookGroup, GroupFilter, GroupImportPreview, GroupImportResult, GroupInput, GroupOpenResult, GroupOperationsSummary } from '@shared/types';
 
 export class GroupService {
   constructor(private readonly groups: GroupRepository, private readonly accounts: AccountRepository, private readonly queue: QueueRepository, private readonly browser: BrowserManager, private readonly audit: AuditLogRepository, private readonly notify: () => void) {}
@@ -16,6 +16,8 @@ export class GroupService {
     const parsed = groupFilterSchema.safeParse(filter ?? {}); if (!parsed.success) throw new AppError('INVALID_REQUEST', 'Invalid group filter.');
     return this.groups.list(parsed.data);
   }
+  operations(): GroupOperationsSummary[] { return this.groups.operations(); }
+  assignmentMatrix(): AssignmentMatrix { return this.groups.assignmentMatrix(); }
 
   get(groupId: string): FacebookGroup { const group = this.groups.get(this.validId(groupId)); if (!group) throw new AppError('GROUP_NOT_FOUND', 'Group not found.'); return group; }
 

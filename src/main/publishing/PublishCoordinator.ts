@@ -34,6 +34,15 @@ export class PublishCoordinator {
 
   async stopAndDrain(timeoutMs: number): Promise<boolean> {
     this.accepting = false; for (const controller of this.controllers.values()) controller.abort();
+    return this.drain(timeoutMs);
+  }
+
+  async stopAfterCurrent(timeoutMs: number): Promise<boolean> {
+    this.accepting = false;
+    return this.drain(timeoutMs);
+  }
+
+  private async drain(timeoutMs: number): Promise<boolean> {
     const drained = Promise.allSettled([...this.active]).then(() => true);
     return Promise.race([drained, new Promise<false>((resolve) => setTimeout(() => resolve(false), timeoutMs))]);
   }

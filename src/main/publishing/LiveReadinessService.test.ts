@@ -7,7 +7,7 @@ import { FACEBOOK_SELECTORS_VERSION } from './selectors/facebookSelectors';
 const accountId = '11111111-1111-4111-8111-111111111111';
 const groupId = '22222222-2222-4222-8222-222222222222';
 const queueItem: QueueRecord = { id: '33333333-3333-4333-8333-333333333333', accountId, groupId, draftTitle: 'Snapshot', body: 'Body', accountName: 'FB01', groupName: 'Group', groupUrl: 'https://www.facebook.com/groups/demo', status: 'PENDING', media: [], snapshotHash: 'hash', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
-const settings: PublishingSettings = { enabled: true, executionMode: 'LIVE', schedulerIntervalSeconds: 30, maxConcurrentAccounts: 1, videoUploadTimeoutSeconds: 600, canaryMode: true };
+const settings: PublishingSettings = { enabled: true, executionMode: 'LIVE', schedulerIntervalSeconds: 30, maxConcurrentAccounts: 1, videoUploadTimeoutSeconds: 600, maxJobsPerSchedulerSession: 20, canaryMode: true };
 
 describe('LiveReadinessService', () => {
   it('allows only a fresh matching preflight', async () => {

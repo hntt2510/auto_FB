@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AccountApi, AssignmentAccount, AuditLog, CreateAccountInput, DashboardApi, DashboardSummary, DeleteAccountInput, Draft, DraftApi, DraftFilter, DraftInput, DraftMedia, DraftStatus, FacebookAccount, FacebookGroup, GroupApi, GroupFilter, GroupImportPreview, GroupImportResult, GroupInput, GroupOpenResult, HealthCheckResult, LiveReadiness, LogApi, LogFilter, MediaReorderInput, PreflightResult, PublishApi, PublishAttempt, PublishingEngineStatus, PublishingRunResult, PublishingSettings, PublishingSettingsApi, PublishingSettingsUpdate, QueueApi, QueueBatchInput, QueueFilter, QueueItem, QueueOptions, QueuePreview, ReconciliationRecord, RequeueInput, SelectorProbeResult, UpdateAccountInput } from '@shared/types';
+import type { AboutInfo, AccountApi, AccountOperationsSummary, AssignmentAccount, AssignmentMatrix, AuditLog, BackupInfo, CreateAccountInput, DashboardApi, DashboardSummary, DeleteAccountInput, Draft, DraftApi, DraftFilter, DraftInput, DraftMedia, DraftStatus, FacebookAccount, FacebookGroup, GroupApi, GroupFilter, GroupImportPreview, GroupImportResult, GroupInput, GroupOpenResult, GroupOperationsSummary, HealthCheckResult, LiveReadiness, LogApi, LogFilter, MediaReorderInput, OperationsApi, OrphanMediaScan, PlannerSummary, PreflightResult, PublishApi, PublishAttempt, PublishHistoryFilter, PublishingEngineStatus, PublishingHistoryRow, PublishingRunResult, PublishingSettings, PublishingSettingsApi, PublishingSettingsUpdate, QueueApi, QueueBatchActionInput, QueueBatchInput, QueueBatchRescheduleInput, QueueFilter, QueueItem, QueueOptions, QueuePreview, ReconciliationRecord, RequeueInput, SelectorProbeResult, StorageUsage, UpdateAccountInput } from '@shared/types';
 
 type IpcResponse<T> = { ok: true; data: T } | { ok: false; error: { code: string; message: string } };
 
@@ -22,6 +22,7 @@ const accountApi: AccountApi = {
   healthCheck: (accountId: string) => invoke<HealthCheckResult>('accounts:health', accountId),
   delete: (input: DeleteAccountInput) => invoke<void>('accounts:delete', input),
   openProfileFolder: (accountId: string) => invoke<void>('accounts:open-profile', accountId),
+  operations: () => invoke<AccountOperationsSummary[]>('accounts:operations'),
   onChanged: (listener: (accounts: FacebookAccount[]) => void) => {
     const callback = (_event: Electron.IpcRendererEvent, accounts: FacebookAccount[]) => listener(accounts);
     ipcRenderer.on('accounts:changed', callback);
@@ -46,7 +47,9 @@ const groupApi: GroupApi = {
   replaceAssignments: (groupId: string, accountIds: string[]) => invoke<AssignmentAccount[]>('groups:replace-assignments', { groupId, accountIds }),
   accountGroups: (accountId: string) => invoke<FacebookGroup[]>('groups:account-groups', accountId),
   replaceAccountGroups: (accountId: string, groupIds: string[]) => invoke<FacebookGroup[]>('groups:replace-account-groups', { accountId, groupIds }),
-  open: (groupId: string, accountId: string) => invoke<GroupOpenResult>('groups:open', { groupId, accountId })
+  open: (groupId: string, accountId: string) => invoke<GroupOpenResult>('groups:open', { groupId, accountId }),
+  operations: () => invoke<GroupOperationsSummary[]>('groups:operations'),
+  assignmentMatrix: () => invoke<AssignmentMatrix>('groups:assignment-matrix')
 };
 
 const draftApi: DraftApi = {
@@ -71,7 +74,10 @@ const queueApi: QueueApi = {
   pause: (queueId: string) => invoke<QueueItem>('queue:pause', queueId),
   resume: (queueId: string) => invoke<QueueItem>('queue:resume', queueId),
   cancel: (queueId: string) => invoke<QueueItem>('queue:cancel', queueId),
-  delete: (queueId: string) => invoke<void>('queue:delete', queueId)
+  delete: (queueId: string) => invoke<void>('queue:delete', queueId),
+  planner: () => invoke<PlannerSummary>('queue:planner'),
+  batchAction: (input: QueueBatchActionInput) => invoke<QueueItem[]>('queue:batch-action', input),
+  batchReschedule: (input: QueueBatchRescheduleInput) => invoke<QueueItem[]>('queue:batch-reschedule', input)
 };
 
 const dashboardApi: DashboardApi = { summary: () => invoke<DashboardSummary>('dashboard:summary') };
@@ -97,6 +103,7 @@ const publishApi: PublishApi = {
   armScheduler: (acknowledgeOverdue = false) => invoke<PublishingEngineStatus>('publishing:arm-scheduler', { acknowledgeOverdue }),
   disarmScheduler: () => invoke<PublishingEngineStatus>('publishing:disarm-scheduler'),
   stopPublishing: () => invoke<PublishingEngineStatus>('publishing:stop'),
+  stopAfterCurrent: () => invoke<PublishingEngineStatus>('publishing:stop-after-current'),
   exportReport: () => invoke<string | undefined>('publishing:export-report'),
   onChanged: (listener: () => void) => { const callback = () => listener(); ipcRenderer.on('publishing:changed', callback); return () => ipcRenderer.removeListener('publishing:changed', callback); }
 };
@@ -104,6 +111,19 @@ const publishApi: PublishApi = {
 const settingsApi: PublishingSettingsApi = {
   getPublishing: () => invoke<PublishingSettings>('settings:get-publishing'),
   updatePublishing: (input: PublishingSettingsUpdate) => invoke<PublishingSettings>('settings:update-publishing', input)
+};
+
+const operationsApi: OperationsApi = {
+  history: (filter?: PublishHistoryFilter) => invoke<PublishingHistoryRow[]>('operations:history', filter ?? {}),
+  exportHistoryCsv: (filter?: PublishHistoryFilter) => invoke<string | undefined>('operations:export-history', filter ?? {}),
+  listBackups: () => invoke<BackupInfo[]>('operations:list-backups'),
+  createBackup: () => invoke<BackupInfo>('operations:create-backup'),
+  restoreBackup: (backupId: string) => invoke<void>('operations:restore-backup', backupId),
+  storageUsage: () => invoke<StorageUsage>('operations:storage'),
+  cleanDiagnostics: () => invoke<number>('operations:clean-diagnostics'),
+  scanOrphanMedia: () => invoke<OrphanMediaScan>('operations:scan-orphan-media'),
+  cleanOrphanMedia: (candidateIds: string[]) => invoke<number>('operations:clean-orphan-media', { candidateIds }),
+  about: () => invoke<AboutInfo>('operations:about')
 };
 
 contextBridge.exposeInMainWorld('accountApi', accountApi);
@@ -115,3 +135,4 @@ contextBridge.exposeInMainWorld('queueApi', queueApi);
 contextBridge.exposeInMainWorld('dashboardApi', dashboardApi);
 contextBridge.exposeInMainWorld('publishApi', publishApi);
 contextBridge.exposeInMainWorld('settingsApi', settingsApi);
+contextBridge.exposeInMainWorld('operationsApi', operationsApi);

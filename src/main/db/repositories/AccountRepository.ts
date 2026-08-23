@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import type { AccountStatus, FacebookAccount, HealthStatus } from '@shared/types';
+import type { AccountOperationsSummary, AccountStatus, FacebookAccount, HealthStatus, OperationalHealthStatus, PublishingBlock } from '@shared/types';
 
 type AccountRow = {
   id: string; name: string; profile_name: string; profile_directory: string; proxy_enabled: number;
@@ -84,6 +84,22 @@ export class AccountRepository {
   hasActiveQueueItems(id: string): boolean {
     const row = this.db.prepare("SELECT 1 AS present FROM queue_items WHERE account_id = ? AND status IN ('PENDING', 'PAUSED', 'RUNNING', 'NEEDS_ATTENTION') LIMIT 1").get(id) as { present: number } | undefined;
     return Boolean(row);
+  }
+
+  operations(): AccountOperationsSummary[] {
+    type Row = AccountRow & { block_reason: PublishingBlock['reason'] | null; block_message: string | null; blocked_at: string | null; last_success: string | null; last_failure: string | null; pending_queue: number; due_queue: number; needs_attention: number };
+    const now = new Date().toISOString();
+    const rows = this.db.prepare(`SELECT a.*, b.reason AS block_reason, b.message AS block_message, b.blocked_at,
+      (SELECT MAX(completed_at) FROM queue_items q WHERE q.account_id = a.id AND q.status = 'SUCCEEDED') AS last_success,
+      (SELECT MAX(COALESCE(completed_at, updated_at)) FROM queue_items q WHERE q.account_id = a.id AND q.status IN ('FAILED','NEEDS_ATTENTION')) AS last_failure,
+      (SELECT COUNT(*) FROM queue_items q WHERE q.account_id = a.id AND q.status IN ('PENDING','PAUSED')) AS pending_queue,
+      (SELECT COUNT(*) FROM queue_items q WHERE q.account_id = a.id AND q.status = 'PENDING' AND q.scheduled_at IS NOT NULL AND q.scheduled_at <= ?) AS due_queue,
+      (SELECT COUNT(*) FROM queue_items q WHERE q.account_id = a.id AND q.status = 'NEEDS_ATTENTION') AS needs_attention
+      FROM accounts a LEFT JOIN account_publish_blocks b ON b.account_id = a.id ORDER BY a.created_at`).all(now) as Row[];
+    return rows.map((row) => {
+      const facebookSession: OperationalHealthStatus = row.block_reason ? 'BLOCKED' : row.last_health_status === 'READY' ? 'READY' : row.last_health_status === 'LOGIN_REQUIRED' ? 'LOGIN_REQUIRED' : row.last_health_status === 'CHECKPOINT' ? 'CHECKPOINT' : row.last_error?.toLowerCase().includes('proxy') ? 'PROXY_ERROR' : row.status === 'ERROR' || row.last_health_status === 'ERROR' ? 'BROWSER_ERROR' : 'UNKNOWN';
+      return { accountId: row.id, accountName: row.name, browser: row.status, facebookSession, publishingBlock: row.block_reason ? { accountId: row.id, accountName: row.name, reason: row.block_reason, message: row.block_message!, blockedAt: row.blocked_at! } : undefined, proxyConfigured: Boolean(row.proxy_enabled), lastSuccessfulPublish: row.last_success ?? undefined, lastFailure: row.last_failure ?? undefined, pendingQueue: row.pending_queue, dueQueue: row.due_queue, needsAttention: row.needs_attention };
+    });
   }
 
   delete(id: string): void { this.db.prepare('DELETE FROM accounts WHERE id = ?').run(id); }

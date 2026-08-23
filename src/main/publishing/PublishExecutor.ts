@@ -68,11 +68,11 @@ export class PublishExecutor {
     this.profiles.assertControlledDirectory(account.profileDirectory);
     const result = await this.browser.withAccountPage(account.id, (page) => this.publisher.preflight(page, item, fillContent, settings, async (activePage, status) => this.diagnostics.capturePreflight(activePage, item.id, status)));
     this.attempts.recordSelectorProbe(result);
-    const preflight = { ...result, queueItemId: item.id, accountReady: result.session.status === 'FOUND', groupOpened: result.group.status === 'FOUND', composerFound: result.composerTrigger.status === 'FOUND', textboxFound: result.composerTextbox.status === 'FOUND', mediaInputFound: result.mediaInput.status === 'FOUND', postButtonFound: result.postButton.status === 'FOUND', passed: result.status === 'FOUND', filledContent: fillContent ? Boolean(result.contentObserved) : false };
+    const preflight = { ...result, filledContent: fillContent ? Boolean(result.contentObserved) : false };
     this.attempts.recordPreflight(preflight); this.notifySafe(); return preflight;
   }
 
-  async probe(item: QueueRecord): Promise<SelectorProbeResult> { const result = await this.preflight(item, { enabled: false, executionMode: 'DRY_RUN', schedulerIntervalSeconds: 30, maxConcurrentAccounts: 1, videoUploadTimeoutSeconds: 60 }, false); return result; }
+  async probe(item: QueueRecord): Promise<SelectorProbeResult> { const result = await this.preflight(item, { enabled: false, executionMode: 'DRY_RUN', schedulerIntervalSeconds: 30, maxConcurrentAccounts: 1, videoUploadTimeoutSeconds: 60, maxJobsPerSchedulerSession: 20 }, false); return result; }
 
   private recordMilestone(attemptId: string, event: PublishMilestone, detail?: string): void { this.attempts.addEvent(attemptId, event, detail); const status: Partial<Record<PublishMilestone, PublishAttemptStatus>> = { COMPOSER_OPENED: 'COMPOSER_OPENED', CONTENT_FILLED: 'CONTENT_FILLED', MEDIA_UPLOADED: 'MEDIA_UPLOADED', SUBMITTING: 'SUBMITTING' }; if (status[event]) this.attempts.setAttemptStatus(attemptId, status[event]!); }
   private irreversible(attemptId: string): boolean { return this.attempts.getAttempt(attemptId)?.irreversibleReached ?? false; }

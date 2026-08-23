@@ -7,6 +7,8 @@ const activeSchema = z.boolean();
 
 export function registerGroupIpc(service: GroupService, allowedSenderIds: () => ReadonlySet<number>): () => void {
   const cleanups = [
+    registerAuthorizedHandler('groups:operations', allowedSenderIds, () => service.operations()),
+    registerAuthorizedHandler('groups:assignment-matrix', allowedSenderIds, () => service.assignmentMatrix()),
     registerAuthorizedHandler('groups:list', allowedSenderIds, (_event, filter: unknown) => service.list(parseOrThrow(groupFilterSchema.safeParse(filter ?? {})))),
     registerAuthorizedHandler('groups:get', allowedSenderIds, (_event, id: unknown) => service.get(parseOrThrow(groupIdSchema.safeParse(id)))),
     registerAuthorizedHandler('groups:create', allowedSenderIds, (_event, input: unknown) => service.create(parseOrThrow(groupInputSchema.safeParse(input)))),

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { shell } from 'electron';
 import { accountIdSchema, createAccountSchema, deleteAccountSchema, updateAccountSchema } from '@shared/schemas';
-import type { CreateAccountInput, DeleteAccountInput, FacebookAccount, HealthCheckResult, LogFilter, UpdateAccountInput, AuditLog } from '@shared/types';
+import type { AccountOperationsSummary, CreateAccountInput, DeleteAccountInput, FacebookAccount, HealthCheckResult, LogFilter, UpdateAccountInput, AuditLog } from '@shared/types';
 import { AccountRepository } from '@main/db/repositories/AccountRepository';
 import { AuditLogRepository } from '@main/db/repositories/AuditLogRepository';
 import { SecretStore, SecretStoreError } from '@main/security/SecretStore';
@@ -25,6 +25,7 @@ export class AccountService {
   }
 
   list(): FacebookAccount[] { return this.accounts.list().map(publicAccount); }
+  operations(): AccountOperationsSummary[] { return this.accounts.operations(); }
   logs(filter?: LogFilter): AuditLog[] { return this.audit.list(filter); }
 
   create(input: CreateAccountInput): FacebookAccount {

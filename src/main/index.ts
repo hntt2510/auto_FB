@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, safeStorage } from 'electron';
-import { join } from 'node:path';
-import { existsSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { copyFile, rename, rm } from 'node:fs/promises';
+import { existsSync, readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { createAppPaths, openDatabase } from './db/database';
 import { AccountRepository } from './db/repositories/AccountRepository';
@@ -34,6 +35,8 @@ import { PublishingService } from './publishing/PublishingService';
 import { LiveReadinessService } from './publishing/LiveReadinessService';
 import { OperationsReportService } from './publishing/OperationsReportService';
 import { broadcastPublishingChanged } from './ipc/publishing.ipc';
+import { OperationsService } from './services/OperationsService';
+import { LATEST_SCHEMA_VERSION } from './db/migrations';
 
 let service: AccountService | undefined;
 let cleanupIpc: (() => void) | undefined;
@@ -44,6 +47,8 @@ let coordinator: PublishCoordinator | undefined;
 let publishing: PublishingService | undefined;
 
 registerMediaScheme();
+
+if (process.env.FB_ACCOUNT_MANAGER_USER_DATA) app.setPath('userData', resolve(process.env.FB_ACCOUNT_MANAGER_USER_DATA));
 
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
@@ -76,18 +81,21 @@ if (!gotLock) {
     const executor = new PublishExecutor(queue, publishRepository, accounts, groups, profiles, service.browser, new FacebookPublisher(new FacebookComposerAdapter(), media), diagnostics, audit, workspaceNotify, liveReadiness);
     coordinator = new PublishCoordinator(queue, executor);
     const publishingSettings = new PublishingSettingsService(settings, audit, () => { scheduler?.reconfigure(); workspaceNotify(); });
-    scheduler = new PublishScheduler(queue, coordinator, publishingSettings, workspaceNotify, false);
-    const operationsReport = new OperationsReportService(accounts, queue, publishRepository, publishingSettings, executor.selectorVersion, app.getVersion());
+    scheduler = new PublishScheduler(queue, coordinator, publishingSettings, workspaceNotify);
+    const operationsReport = new OperationsReportService(accounts, queue, publishRepository, publishingSettings, executor.selectorVersion, app.getVersion(), scheduler);
     publishing = new PublishingService(queue, publishRepository, accounts, groups, media, executor, coordinator, scheduler, publishingSettings, diagnostics, audit, workspaceNotify, liveReadiness, operationsReport);
-    publishingSettings.resetEngineOnStartup();
     publishing.recover(); service.setHealthObserver((result) => publishing?.handleHealthResult(result)); scheduler.start();
+    const operations = new OperationsService(database, paths, publishRepository, scheduler, audit, { appName: 'Facebook Account Manager', appVersion: app.getVersion(), databaseSchema: LATEST_SCHEMA_VERSION, selectorVersion: executor.selectorVersion, electronVersion: process.versions.electron, playwrightVersion: dependencyVersion('playwright') }, async (backupPath) => {
+      scheduler?.stop(); await service?.browser.closeAll(); cleanupIpc?.(); database?.close(); database = undefined; const temporary = paths.database + '.restore'; await rm(temporary, { force: true }); await copyFile(backupPath, temporary); await rm(paths.database + '-wal', { force: true }); await rm(paths.database + '-shm', { force: true }); await rm(paths.database, { force: true }); await rename(temporary, paths.database); quitting = true; app.relaunch(); app.exit(0);
+    });
     cleanupIpc = chainCleanup(cleanupIpc, registerWorkspaceIpc({
       groups: new GroupService(groups, accounts, queue, service.browser, audit, workspaceNotify),
       drafts: new DraftService(drafts, queue, media, audit, workspaceNotify),
       queue: new QueueService(queue, drafts, accounts, groups, media, audit, workspaceNotify),
       dashboard: new DashboardService(database, publishingSettings),
       publishing,
-      settings: publishingSettings
+      settings: publishingSettings,
+      operations
     }, () => new Set(BrowserWindow.getAllWindows().map((current) => current.webContents.id))));
     createWindow();
     app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
@@ -145,3 +153,5 @@ function createWindow(): BrowserWindow {
 function sanitizeRuntimeMessage(message: string): string {
   return message.replace(/(password|cookie|token|access_token|secret)[^\s]*/gi, '$1 [redacted]').slice(0, 500);
 }
+
+function dependencyVersion(name: string): string { try { const value = JSON.parse(readFileSync(join(app.getAppPath(), 'package.json'), 'utf8')) as { dependencies?: Record<string, string> }; return value.dependencies?.[name]?.replace(/^[^0-9]*/, '') ?? 'unknown'; } catch { return 'unknown'; } }

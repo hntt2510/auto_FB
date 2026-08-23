@@ -25,6 +25,7 @@ export function registerPublishingIpc(service: PublishingService, allowedSenderI
     registerAuthorizedHandler('publishing:arm-scheduler', allowedSenderIds, (_event, input: unknown) => service.armScheduler(parseOrThrow(schedulerArmSchema.safeParse(input)).acknowledgeOverdue)),
     registerAuthorizedHandler('publishing:disarm-scheduler', allowedSenderIds, () => service.disarmScheduler()),
     registerAuthorizedHandler('publishing:stop', allowedSenderIds, () => service.stopPublishing()),
+    registerAuthorizedHandler('publishing:stop-after-current', allowedSenderIds, () => service.stopAfterCurrent()),
     registerAuthorizedHandler('publishing:export-report', allowedSenderIds, () => service.exportReport())
   ];
   return () => cleanups.forEach((cleanup) => cleanup());

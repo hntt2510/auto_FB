@@ -43,6 +43,8 @@ Application data is stored below Electron's user data directory:
 ├── app.db
 ├── profiles/
 ├── media/
+├── diagnostics/
+├── backups/
 └── logs/
 ```
 
@@ -110,8 +112,9 @@ the visible composer and validates managed media but never clicks Post.
 Switching to LIVE is an explicit operator action. The backend rechecks the
 live-readiness gate immediately before claiming a canary item; renderer
 disabled buttons are not a security boundary. Scheduler arming is session-only
-and overdue work requires explicit acknowledgement. Publishing Engine is reset
-to OFF on application startup so a restart cannot consume an overdue backlog.
+and overdue work requires explicit acknowledgement. Scheduler runtime arming is
+always reset to `DISARMED` on application startup, independently of persisted
+publishing settings, so a restart cannot consume an overdue backlog.
 
 Publication verification is candidate-scoped. Existing post links and
 tracking-parameter variants are ignored, unrelated same-group posts remain
@@ -133,3 +136,30 @@ Development runtime note: npm run dev opens the supported Electron desktop
 window. The Vite localhost URL is only the renderer development server; do
 not open http://localhost:5173 directly in Chrome because a normal browser
 has no Electron preload bridge or privileged IPC.
+
+## Production Operations V2
+
+Version 0.7.0 adds an operator-controlled production workspace:
+
+- **Planner** groups PENDING/PAUSED work by local day and account, flags
+  15-minute same-account schedule conflicts, and applies reschedule,
+  pause/resume/cancel batches transactionally.
+- **Publishing** exposes runtime `DISARMED`, `ARMED`, and `STOPPING` states,
+  an overdue backlog preview, explicit arm confirmation, a 1–100 jobs-per-session
+  cap (20 by default), and stop-after-current draining. Runtime arming is never
+  persisted.
+- Queue and History keep **Final Status**, **Automated Result**, and
+  **Verification** separate. Operator reconciliation never overwrites the
+  historical automated result.
+- Media preparation revalidates managed-root confinement, regular-file status,
+  readability, size, extension, and signature in deterministic `sortOrder`.
+  Live image/video compatibility remains intentionally unclaimed until a
+  controlled media canary is performed.
+- Settings can create and list SQLite-safe managed backups, restore only a
+  validated managed backup while publishing is inactive, calculate storage on
+  demand, clean retained diagnostics, and review orphan media before deletion.
+- Sanitized CSV/JSON exports contain operational IDs, names, statuses, evidence
+  classifications, versions, and validated post URLs only. They never include
+  post bodies, proxy credentials, cookies, tokens, session storage, or media.
+
+See [CHANGELOG.md](CHANGELOG.md) for milestone release notes.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createAccountSchema, updateAccountSchema } from './schemas';
+import { createAccountSchema, publishingSettingsSchema, updateAccountSchema } from './schemas';
 
 describe('account schemas', () => {
   it('accepts direct and authenticated fixed proxy accounts', () => {
@@ -16,4 +16,5 @@ describe('account schemas', () => {
   it('does not allow a password without a username on update', () => {
     expect(updateAccountSchema.safeParse({ accountId: '00000000-0000-0000-0000-000000000000', name: 'FB', proxyEnabled: true, proxyHost: 'host', proxyPort: 80, proxyPassword: 'secret' }).success).toBe(false);
   });
+  it('defaults and bounds the scheduler session safety cap', () => { const base = { enabled: false, executionMode: 'DRY_RUN', schedulerIntervalSeconds: 30, maxConcurrentAccounts: 2, videoUploadTimeoutSeconds: 600, canaryMode: true }; expect(publishingSettingsSchema.parse(base).maxJobsPerSchedulerSession).toBe(20); expect(publishingSettingsSchema.safeParse({ ...base, maxJobsPerSchedulerSession: 0 }).success).toBe(false); expect(publishingSettingsSchema.safeParse({ ...base, maxJobsPerSchedulerSession: 101 }).success).toBe(false); });
 });

@@ -1,6 +1,6 @@
 {
   "name": "fb-account-manager",
-  "version": "1.0.0",
+  "version": "0.7.0",
   "description": "Local Facebook account and persistent profile manager",
   "main": "out/main/index.js",
   "author": "",

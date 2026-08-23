@@ -1,4 +1,4 @@
-import type { AccountApi, AppBridge, DashboardApi, DraftApi, GroupApi, LogApi, PublishApi, PublishingSettingsApi, QueueApi } from './types';
+import type { AccountApi, AppBridge, DashboardApi, DraftApi, GroupApi, LogApi, OperationsApi, PublishApi, PublishingSettingsApi, QueueApi } from './types';
 
 declare global {
   interface Window {
@@ -11,6 +11,7 @@ declare global {
     dashboardApi: DashboardApi;
     publishApi: PublishApi;
     settingsApi: PublishingSettingsApi;
+    operationsApi: OperationsApi;
   }
 }
 

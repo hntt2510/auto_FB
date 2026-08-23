@@ -4,7 +4,7 @@ import type { PublishExecutor } from './PublishExecutor';
 import type { PublishingSettings, QueueItem } from '@shared/types';
 import { PublishCoordinator } from './PublishCoordinator';
 
-const settings: PublishingSettings = { enabled: true, executionMode: 'LIVE', schedulerIntervalSeconds: 30, maxConcurrentAccounts: 2, videoUploadTimeoutSeconds: 600 };
+const settings: PublishingSettings = { enabled: true, executionMode: 'LIVE', schedulerIntervalSeconds: 30, maxConcurrentAccounts: 2, videoUploadTimeoutSeconds: 600, maxJobsPerSchedulerSession: 20 };
 function item(id: string, accountId: string): QueueItem { return { id, accountId, groupId: crypto.randomUUID(), draftTitle: id, body: '', accountName: accountId, groupName: 'Group', groupUrl: 'https://www.facebook.com/groups/test', status: 'PENDING', media: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }; }
 
 describe('PublishCoordinator concurrency', () => {
@@ -33,5 +33,11 @@ describe('PublishCoordinator concurrency', () => {
       await vi.advanceTimersByTimeAsync(1); expect(starts).toEqual([{ id: 'one', at: 0 }, { id: 'two', at: 5000 }]);
       await vi.advanceTimersByTimeAsync(5000); await running;
     } finally { vi.useRealTimers(); }
+  });
+
+  it('stops accepting queued work while allowing the current operation to finish', async () => {
+    let release!: () => void; const gate = new Promise<void>((resolve) => { release = resolve; }); const items = new Map([['one', item('one', 'account')], ['two', item('two', 'account')]]); const started: string[] = [];
+    const executor = { execute: vi.fn(async (id: string) => { started.push(id); await gate; return 'COMPLETED' as const; }) }; const coordinator = new PublishCoordinator({ get: (id: string) => items.get(id) } as unknown as QueueRepository, executor as unknown as PublishExecutor);
+    const run = coordinator.run(['one', 'two'], settings); await new Promise((resolve) => setTimeout(resolve, 0)); const draining = coordinator.stopAfterCurrent(1000); expect(started).toEqual(['one']); release(); expect(await draining).toBe(true); expect(await run).toEqual({ requested: 2, claimed: 1, completed: 1, skipped: 1 }); expect(started).toEqual(['one']);
   });
 });

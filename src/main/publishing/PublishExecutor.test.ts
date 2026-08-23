@@ -4,7 +4,7 @@ import type { PublishingSettings } from '@shared/types';
 import { PublishExecutor } from './PublishExecutor';
 import { PublishingError } from './PublishingError';
 
-const settings: PublishingSettings = { enabled: true, executionMode: 'LIVE', schedulerIntervalSeconds: 30, maxConcurrentAccounts: 2, videoUploadTimeoutSeconds: 600 };
+const settings: PublishingSettings = { enabled: true, executionMode: 'LIVE', schedulerIntervalSeconds: 30, maxConcurrentAccounts: 2, videoUploadTimeoutSeconds: 600, maxJobsPerSchedulerSession: 20 };
 const item: QueueRecord = { id: '11111111-1111-4111-8111-111111111111', accountId: '22222222-2222-4222-8222-222222222222', groupId: '33333333-3333-4333-8333-333333333333', draftTitle: 'Snapshot', body: 'Body', accountName: 'FB01', groupName: 'Group', groupUrl: 'https://www.facebook.com/groups/test', status: 'PENDING', media: [], snapshotHash: 'hash', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
 
 function fixture(error: PublishingError) {

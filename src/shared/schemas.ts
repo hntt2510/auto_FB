@@ -90,9 +90,17 @@ export const publishRunSelectedSchema = z.object({ queueIds: z.array(queueIdSche
 export const publishRetrySchema = z.object({ queueId: queueIdSchema, acknowledgeDuplicateRisk: z.boolean() });
 export const publishRequeueSchema = z.object({ queueId: queueIdSchema, scheduledAt: z.string().datetime().refine((value) => value.endsWith('Z'), 'Schedule must be UTC.').optional() });
 export const publishMarkVerifiedSchema = z.object({ queueId: queueIdSchema, evidence: z.string().trim().min(1).max(500).optional() });
-export const publishingSettingsSchema = z.object({ enabled: z.boolean(), executionMode: z.enum(['DRY_RUN', 'LIVE']), schedulerIntervalSeconds: z.number().int().min(15).max(300), maxConcurrentAccounts: z.number().int().min(1).max(3), videoUploadTimeoutSeconds: z.number().int().min(60).max(1800), canaryMode: z.boolean().default(true) });
+export const publishingSettingsSchema = z.object({ enabled: z.boolean(), executionMode: z.enum(['DRY_RUN', 'LIVE']), schedulerIntervalSeconds: z.number().int().min(15).max(300), maxConcurrentAccounts: z.number().int().min(1).max(3), videoUploadTimeoutSeconds: z.number().int().min(60).max(1800), maxJobsPerSchedulerSession: z.number().int().min(1).max(100).default(20), canaryMode: z.boolean().default(true) });
 export const publishingSettingsUpdateSchema = publishingSettingsSchema.extend({ confirmLive: z.boolean().optional() });
 export const schedulerArmSchema = z.object({ acknowledgeOverdue: z.boolean().optional() }).default({});
+export const queueBatchActionSchema = z.object({ queueIds: z.array(queueIdSchema).min(1).max(500).transform((ids) => [...new Set(ids)]), action: z.enum(['PAUSE', 'RESUME', 'CANCEL']) });
+export const queueBatchRescheduleSchema = z.object({ queueIds: z.array(queueIdSchema).min(1).max(500).transform((ids) => [...new Set(ids)]), mode: z.enum(['SET_TIME', 'SHIFT', 'CLEAR']), scheduledAt: z.string().datetime().refine((value) => value.endsWith('Z'), 'Schedule must be UTC.').optional(), shiftMinutes: z.number().int().min(-525600).max(525600).optional() }).superRefine((value, ctx) => {
+  if (value.mode === 'SET_TIME' && !value.scheduledAt) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['scheduledAt'], message: 'A UTC schedule is required.' });
+  if (value.mode === 'SHIFT' && (!value.shiftMinutes || value.shiftMinutes === 0)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['shiftMinutes'], message: 'A non-zero shift is required.' });
+});
+export const publishHistoryFilterSchema = z.object({ from: z.string().datetime().optional(), to: z.string().datetime().optional(), accountId: accountIdSchema.optional(), groupId: groupIdSchema.optional(), outcome: z.string().trim().max(80).optional(), verificationSource: z.enum(['AUTOMATED', 'OPERATOR', 'NONE']).optional(), search: z.string().trim().max(200).optional() });
+export const backupIdSchema = z.string().regex(/^(manual|pre-restore|app)-[A-Za-z0-9._-]+\.db$/, 'Invalid managed backup identifier.').max(180);
+export const orphanCleanupSchema = z.object({ candidateIds: z.array(mediaIdSchema).max(1000).transform((ids) => [...new Set(ids)]) });
 
 export type CreateAccountData = z.infer<typeof createAccountSchema>;
 export type UpdateAccountData = z.infer<typeof updateAccountSchema>;

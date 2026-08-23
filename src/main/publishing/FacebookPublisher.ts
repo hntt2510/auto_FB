@@ -3,11 +3,11 @@ import type { QueueRecord } from '@main/db/repositories/QueueRepository';
 import type { PublishingSettings } from '@shared/types';
 import { AppError } from '@main/errors';
 import { MediaStorageService } from '@main/services/MediaStorageService';
-import { FacebookComposerAdapter, type PreflightDiagnosticCapture, type SubmissionEvidence } from './FacebookComposerAdapter';
+import { FacebookComposerAdapter, type PostSubmitObservationMilestone, type PreflightDiagnosticCapture, type SubmissionEvidence } from './FacebookComposerAdapter';
 import type { PreflightResult } from '@shared/types';
 import { PublishingError } from './PublishingError';
 
-export type PublishMilestone = 'ACCOUNT_READY' | 'GROUP_OPENED' | 'COMPOSER_OPENED' | 'CONTENT_FILLED' | 'MEDIA_VALIDATED' | 'MEDIA_UPLOADED' | 'SUBMITTING' | 'POST_CLICKED' | 'POST_CORRELATION';
+export type PublishMilestone = 'ACCOUNT_READY' | 'GROUP_OPENED' | 'COMPOSER_OPENED' | 'CONTENT_FILLED' | 'MEDIA_VALIDATED' | 'MEDIA_UPLOADED' | 'SUBMITTING' | PostSubmitObservationMilestone;
 
 export class FacebookPublisher {
   constructor(private readonly adapter: FacebookComposerAdapter, private readonly media: MediaStorageService) {}
@@ -27,7 +27,7 @@ export class FacebookPublisher {
     await this.adapter.fillContent(composer, item.body, item.linkUrl); milestone('CONTENT_FILLED'); this.assertNotCancelled(signal);
     if (paths.length) { await this.adapter.uploadMedia(page, paths, item.media.some((asset) => asset.type === 'VIDEO'), settings.videoUploadTimeoutSeconds, composer.container); milestone('MEDIA_UPLOADED'); }
     this.assertNotCancelled(signal);
-    const result = await this.adapter.submit(page, composer, baseline, item.groupUrl, () => milestone('SUBMITTING'), (detail) => milestone('POST_CORRELATION', detail)); milestone('POST_CLICKED'); return result;
+    return this.adapter.submit(page, composer, baseline, item.groupUrl, () => milestone('SUBMITTING'), (event, detail) => milestone(event, detail));
   }
 
   async preflight(page: Page, item: QueueRecord, fillContent = false, settings?: PublishingSettings, captureDiagnostic?: PreflightDiagnosticCapture): Promise<PreflightResult> {

@@ -8,6 +8,7 @@ import { FACEBOOK_SELECTORS_VERSION, facebookText } from './selectors/facebookSe
 
 export type PostCandidate = { url: string; canonicalUrl: string; container?: Locator; visibleText?: string; groupIdentifier?: string };
 export type SubmissionEvidence = { result: 'SUBMITTED' | 'SUBMITTED_PENDING_APPROVAL' | 'VERIFIED_PUBLISHED' | 'UNKNOWN'; evidence: string; postUrl?: string };
+export type PostSubmitObservationMilestone = 'POST_CLICKED' | 'POST_OBSERVATION_STARTED' | 'POST_OBSERVATION_MINIMUM_REACHED' | 'COMPOSER_CLOSED' | 'PENDING_APPROVAL_DETECTED' | 'ACCEPTANCE_DETECTED' | 'NEW_POST_CANDIDATE' | 'POST_CORRELATED' | 'POST_CORRELATION';
 export type ComposerHandle = { container: Locator; textbox: Locator; textboxStrategy?: string; textboxCandidates?: TextboxCandidateSummary[]; dialogTitle?: string; dialogCandidates?: DialogCandidateSummary[]; rawEditorCount?: number; logicalEditorCount?: number };
 export type SubmissionBaseline = { urls: string[]; bodyFingerprint: string; candidates?: PostCandidate[] };
 export type ComposerContentEntry = { method: ComposerEntryMethod; editorType: ComposerEditorType; visibleContentPresent: boolean; contentLength: number; expectedLength: number };
@@ -34,6 +35,8 @@ const COMPOSER_TRIGGER_PHRASES = [
 ];
 
 const EMPTY_FIELD: SelectorProbeField = { status: 'NOT_TESTED' };
+export const POST_SUBMIT_MIN_OBSERVATION_MS = 5000;
+const POST_SUBMIT_POLL_MS = 250;
 
 /** Canonical identity for a Facebook post candidate. Tracking parameters and fragments
  * are deliberately discarded so an existing post cannot look newly published. */
@@ -568,22 +571,42 @@ export class FacebookComposerAdapter {
     } catch (error) { if (error instanceof PublishingError) throw error; throw new PublishingError('MEDIA_UPLOAD_TIMEOUT', 'Facebook media processing did not finish safely.'); }
   }
 
-  async submit(page: Page, composer: ComposerHandle, baseline: SubmissionBaseline, groupUrl: string, onSubmitting: () => void, onCorrelation?: (detail: string) => void): Promise<SubmissionEvidence> {
+  async submit(page: Page, composer: ComposerHandle, baseline: SubmissionBaseline, groupUrl: string, onSubmitting: () => void, onObservation?: (event: PostSubmitObservationMilestone, detail?: string) => void): Promise<SubmissionEvidence> {
     const button = await this.uniqueVisible([composer.container.getByRole('button', { name: facebookText.postButton }), composer.container.locator('[role="button"]').filter({ hasText: facebookText.postButton })]);
     if (!button || !await button.isEnabled().catch(() => false)) throw new PublishingError('SUBMIT_FAILED', 'A unique enabled Post button was not found in the active composer.');
     onSubmitting();
     try { await button.click({ timeout: 10000 }); } catch { throw new PublishingError('SUBMISSION_UNKNOWN', 'Post interaction result is unknown.', true); }
-    try {
-      const approval = page.getByText(facebookText.pendingApproval).first();
-      if (await approval.isVisible({ timeout: 15000 }).catch(() => false)) return { result: 'SUBMITTED_PENDING_APPROVAL', evidence: 'Facebook displayed a post approval message.' };
-      const accepted = page.getByText(facebookText.accepted).first();
-      const acceptedVisible = await accepted.isVisible({ timeout: 15000 }).catch(() => false); const afterCandidates = await this.postCandidates(page); const before = new Set((baseline.candidates ?? []).map((candidate) => candidate.canonicalUrl).concat(baseline.urls)); const newCandidates = afterCandidates.filter((candidate) => !before.has(candidate.canonicalUrl)); const sameGroup = newCandidates.filter((candidate) => isTargetGroupCandidate(candidate, groupUrl)); const correlated = sameGroup.find((candidate) => candidateContentMatches(candidate.visibleText, baseline.bodyFingerprint)); const newUrl = correlated?.url; const contentMatched = Boolean(correlated);
-      onCorrelation?.('POST_CANDIDATES_BEFORE=' + before.size + ';POST_CANDIDATES_AFTER=' + afterCandidates.length + ';NEW_CORRELATED_CANDIDATES=' + sameGroup.length + ';CONTENT_CORRELATED=' + contentMatched);
-      if (newUrl && acceptedVisible && contentMatched) return { result: 'VERIFIED_PUBLISHED', evidence: 'Facebook displayed submission acceptance and a new target-group post candidate whose scoped text correlated with the snapshot.', postUrl: newUrl };
-      if (acceptedVisible) return { result: 'SUBMITTED', evidence: 'Facebook displayed submission acceptance without correlated publication evidence.' };
-      if (!await composer.container.isVisible().catch(() => false)) return { result: 'SUBMITTED', evidence: 'Composer closed after the Post interaction.' };
-      return { result: 'UNKNOWN', evidence: 'Facebook did not provide conclusive submission evidence.' };
-    } catch { return { result: 'UNKNOWN', evidence: 'Facebook submission evidence could not be inspected.' }; }
+    const emit = (event: PostSubmitObservationMilestone, detail?: string): void => { try { onObservation?.(event, detail); } catch { /* evidence logging must not shorten the observation hold */ } };
+    const clickedAt = Date.now(); emit('POST_CLICKED'); emit('POST_OBSERVATION_STARTED');
+    const before = new Set((baseline.candidates ?? []).map((candidate) => candidate.canonicalUrl).concat(baseline.urls));
+    const observed = { composerClosed: false, pendingApproval: false, accepted: false, newTargetCandidates: 0, correlatedUrl: undefined as string | undefined, inspectionFailed: false };
+    while (true) {
+      try {
+        if (typeof page.isClosed === 'function' && page.isClosed()) observed.inspectionFailed = true;
+        else {
+          const composerClosed = !await composer.container.isVisible().catch(() => false);
+          if (composerClosed && !observed.composerClosed) { observed.composerClosed = true; emit('COMPOSER_CLOSED'); }
+          const pendingApproval = await page.getByText(facebookText.pendingApproval).first().isVisible().catch(() => false);
+          if (pendingApproval && !observed.pendingApproval) { observed.pendingApproval = true; emit('PENDING_APPROVAL_DETECTED'); }
+          const accepted = await page.getByText(facebookText.accepted).first().isVisible().catch(() => false);
+          if (accepted && !observed.accepted) { observed.accepted = true; emit('ACCEPTANCE_DETECTED'); }
+          const afterCandidates = await this.postCandidates(page); const newCandidates = afterCandidates.filter((candidate) => !before.has(candidate.canonicalUrl)); const sameGroup = newCandidates.filter((candidate) => isTargetGroupCandidate(candidate, groupUrl));
+          if (sameGroup.length > observed.newTargetCandidates) { observed.newTargetCandidates = sameGroup.length; emit('NEW_POST_CANDIDATE', 'TARGET_GROUP_CANDIDATES=' + sameGroup.length); }
+          const correlated = sameGroup.find((candidate) => candidateContentMatches(candidate.visibleText, baseline.bodyFingerprint));
+          if (correlated?.url && !observed.correlatedUrl) { observed.correlatedUrl = correlated.url; emit('POST_CORRELATED', 'CONTENT_CORRELATED=YES'); }
+        }
+      } catch { observed.inspectionFailed = true; }
+      const remaining = clickedAt + POST_SUBMIT_MIN_OBSERVATION_MS - Date.now();
+      if (remaining <= 0) break;
+      await new Promise((resolve) => setTimeout(resolve, Math.min(POST_SUBMIT_POLL_MS, remaining)));
+    }
+    emit('POST_OBSERVATION_MINIMUM_REACHED');
+    emit('POST_CORRELATION', 'POST_CANDIDATES_BEFORE=' + before.size + ';NEW_TARGET_GROUP_CANDIDATES=' + observed.newTargetCandidates + ';CONTENT_CORRELATED=' + Boolean(observed.correlatedUrl));
+    if (observed.correlatedUrl && observed.accepted) return { result: 'VERIFIED_PUBLISHED', evidence: 'Facebook displayed submission acceptance and a new target-group post candidate whose scoped text correlated with the snapshot.', postUrl: observed.correlatedUrl };
+    if (observed.pendingApproval) return { result: 'SUBMITTED_PENDING_APPROVAL', evidence: 'Facebook displayed a post approval message.' };
+    if (observed.accepted) return { result: 'SUBMITTED', evidence: 'Facebook displayed submission acceptance without correlated publication evidence.' };
+    if (observed.composerClosed) return { result: 'SUBMITTED', evidence: 'Composer closed after the Post interaction.' };
+    return { result: 'UNKNOWN', evidence: observed.inspectionFailed ? 'Facebook submission evidence could not be inspected continuously.' : 'Facebook did not provide conclusive submission evidence.' };
   }
 
   private async triggerScopes(page: Page): Promise<Locator[]> {

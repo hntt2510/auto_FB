@@ -21,4 +21,17 @@ describe('PublishCoordinator concurrency', () => {
     const coordinator = new PublishCoordinator({ get: (id: string) => items.get(id) } as unknown as QueueRepository, executor as unknown as PublishExecutor);
     await coordinator.run(['one', 'two'], settings); expect(max).toBe(2);
   });
+
+  it('does not release the same-account queue during the post-submit hold', async () => {
+    vi.useFakeTimers(); vi.setSystemTime(0);
+    try {
+      const items = new Map([['one', item('one', 'account')], ['two', item('two', 'account')]]); const starts: Array<{ id: string; at: number }> = [];
+      const executor = { execute: vi.fn(async (id: string) => { starts.push({ id, at: Date.now() }); await new Promise((resolve) => setTimeout(resolve, 5000)); return 'COMPLETED' as const; }) };
+      const coordinator = new PublishCoordinator({ get: (id: string) => items.get(id) } as unknown as QueueRepository, executor as unknown as PublishExecutor);
+      const running = coordinator.run(['one', 'two'], settings); await vi.advanceTimersByTimeAsync(0); expect(starts).toEqual([{ id: 'one', at: 0 }]);
+      await vi.advanceTimersByTimeAsync(4999); expect(starts).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1); expect(starts).toEqual([{ id: 'one', at: 0 }, { id: 'two', at: 5000 }]);
+      await vi.advanceTimersByTimeAsync(5000); await running;
+    } finally { vi.useRealTimers(); }
+  });
 });

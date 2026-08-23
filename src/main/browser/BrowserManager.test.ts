@@ -108,4 +108,14 @@ describe('BrowserManager lifecycle serialization', () => {
     const runtime = makeContext(); gate.resolve(runtime.context); await opening; await shutdown;
     expect(runtime.context.close).toHaveBeenCalledTimes(1); expect(manager.isRunning(accountId)).toBe(false);
   });
+
+  it('keeps the publishing page and account lock alive until the operation resolves', async () => {
+    let closeHandler: (() => void) | undefined; let operationClosed = false;
+    const startupPage = { goto: vi.fn(async () => undefined) }; const operationPage = { isClosed: vi.fn(() => operationClosed), close: vi.fn(async () => { operationClosed = true; }) };
+    const context = { pages: vi.fn(() => [startupPage]), newPage: vi.fn(async () => operationPage), on: vi.fn((_event: string, handler: () => void) => { closeHandler = handler; }), close: vi.fn(async () => closeHandler?.()) };
+    const { manager } = fixture(async () => context as never); await manager.openAccount(accountId); const gate = deferred<void>(); const started = deferred<void>();
+    const operation = manager.withAccountPage(accountId, async (page) => { started.resolve(); await gate.promise; expect(page.isClosed()).toBe(false); });
+    await started.promise; expect(operationPage.close).not.toHaveBeenCalled(); expect(manager.isRunning(accountId)).toBe(true);
+    gate.resolve(); await operation; expect(operationPage.close).toHaveBeenCalledTimes(1); await manager.closeAccount(accountId);
+  });
 });

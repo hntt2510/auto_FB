@@ -9,7 +9,7 @@ export function DashboardPage({
       ?.click();
   },
 }: {
-  onNavigate?: (route: "queue" | "groups" | "accounts") => void;
+  onNavigate?: (route: "queue" | "groups" | "accounts" | "onboarding") => void;
 }) {
   const [summary, setSummary] = useState<DashboardSummary>();
   const [error, setError] = useState("");
@@ -62,6 +62,7 @@ export function DashboardPage({
       summary.today.needsAttention,
       "operator review required",
     ],
+    ["Onboarding tasks", summary.onboarding.todayTasks, "manual checklist today"],
   ];
   return (
     <main className="content">
@@ -110,6 +111,10 @@ export function DashboardPage({
               UNKNOWN <strong>{summary.accountStatuses.unknown}</strong>
             </span>
           </div>
+        </section>
+        <section className="panel">
+          <div className="panel-heading"><h3>Account onboarding</h3><button className="action-button" onClick={() => onNavigate?.("onboarding")}>Open planner</button></div>
+          <div className="status-summary"><span>NEW <strong>{summary.onboarding.new}</strong></span><span>WARMING <strong>{summary.onboarding.warming}</strong></span><span>READY <strong>{summary.onboarding.ready}</strong></span><span>PAUSED <strong>{summary.onboarding.paused}</strong></span></div>
         </section>
         <section className="panel">
           <div className="panel-heading">

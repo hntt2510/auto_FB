@@ -60,6 +60,14 @@ Each account can use exactly one explicitly configured fixed proxy. Supported pr
 
 A running account must be closed before its network configuration can change. Reopening applies the fixed proxy to that account's persistent context, and every Facebook operation continues through that same context. A proxy failure never triggers automatic fallback to Direct or another proxy. Changing network location may cause Facebook to request login or security verification; it does not bypass checkpoints, CAPTCHA, or any platform security control.
 
+## Account onboarding planner
+
+The **Account Onboarding** page provides Basic 3-day and Basic 5-day operator plans. New accounts begin as `NEW`; an operator starts a plan to enter `WARMING`, completes or skips checklist tasks manually, and explicitly marks the account `READY`. `READY` is only a local workflow state and is never a claim that an account is safe from Facebook restrictions. Login, checkpoint, proxy, or browser health failures pause active onboarding and require a successful health check plus an explicit operator resume.
+
+Checklist actions can open the account's existing persistent profile, run the existing health check, or open an assigned group. After a page opens, every Facebook interaction remains manual. The local session timer records only start, end, and duration; it does not inspect mouse movement, typing, page content, messages, reactions, comments, follows, friend requests, or feed activity. Task titles/descriptions and account notes are local guidance and must not contain credentials or other secrets.
+
+Settings includes an optional **Require READY accounts for scheduler** gate, disabled by default. When enabled, scheduled publishing claims only use accounts explicitly marked `READY`; existing health, block, assignment, and preflight checks remain authoritative. Explicit manual runs display an onboarding warning rather than silently pretending the workflow gate was satisfied.
+
 ## Health checks and safety
 
 Health checks classify the current Facebook page conservatively as `READY`, `LOGIN_REQUIRED`, `CHECKPOINT`, or `ERROR`. A stopped account uses a temporary visible persistent context for the check and then closes it. A checkpoint, CAPTCHA, identity confirmation, recovery, suspicious-login, or locked-account signal stops further checking and displays **Manual user action required**.
@@ -107,7 +115,7 @@ Selector probes record the account, group, selector version, field-level `FOUND`
 
 ## Scope
 
-This release intentionally stops at safe account/profile lifecycle, manual content operations, and the opt-in visible-browser publishing engine described above. Comments, scraping, credential entry, CAPTCHA handling, stealth behavior, proxy rotation, and security bypasses remain out of scope.
+This release intentionally stops at safe account/profile lifecycle, human-in-the-loop onboarding, manual content operations, and the opt-in visible-browser publishing engine described above. Automated likes, comments, reactions, follows, friend requests, messaging, feed scrolling, scraping, credential entry, CAPTCHA handling, fake-human simulation, stealth behavior, proxy rotation, and security bypasses remain out of scope.
 
 ## Release-candidate guardrails
 

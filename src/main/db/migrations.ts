@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 
-export const LATEST_SCHEMA_VERSION = 5;
+export const LATEST_SCHEMA_VERSION = 6;
 
 export function runMigrations(db: Database.Database): void {
   db.exec(`
@@ -305,6 +305,45 @@ export function runMigrations(db: Database.Database): void {
       ALTER TABLE accounts ADD COLUMN last_proxy_error TEXT;
       UPDATE accounts SET proxy_status = CASE WHEN proxy_enabled = 1 THEN 'UNTESTED' ELSE 'NOT_CONFIGURED' END;
       CREATE INDEX idx_accounts_proxy_status ON accounts(proxy_status, last_proxy_test_at DESC);
+    `],
+    [6, `
+      ALTER TABLE accounts ADD COLUMN onboarding_status TEXT NOT NULL DEFAULT 'NEW' CHECK (onboarding_status IN ('NEW', 'WARMING', 'READY', 'PAUSED'));
+      ALTER TABLE accounts ADD COLUMN onboarding_started_at TEXT;
+      ALTER TABLE accounts ADD COLUMN onboarding_plan_days INTEGER CHECK (onboarding_plan_days IS NULL OR onboarding_plan_days BETWEEN 1 AND 30);
+      ALTER TABLE accounts ADD COLUMN onboarding_paused_reason TEXT;
+      ALTER TABLE accounts ADD COLUMN onboarding_paused_from TEXT CHECK (onboarding_paused_from IS NULL OR onboarding_paused_from IN ('WARMING', 'READY'));
+      ALTER TABLE accounts ADD COLUMN onboarding_notes TEXT;
+      ALTER TABLE accounts ADD COLUMN last_manual_session_at TEXT;
+      CREATE INDEX idx_accounts_onboarding_status ON accounts(onboarding_status, onboarding_started_at);
+
+      CREATE TABLE account_onboarding_tasks (
+        id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        day_number INTEGER NOT NULL CHECK (day_number BETWEEN 1 AND 30),
+        sort_order INTEGER NOT NULL CHECK (sort_order >= 0),
+        task_type TEXT NOT NULL CHECK (task_type IN ('MANUAL_TASK', 'OPEN_FACEBOOK', 'OPEN_GROUP', 'HEALTH_CHECK')),
+        group_id TEXT REFERENCES groups(id) ON DELETE SET NULL,
+        title TEXT NOT NULL,
+        description TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'DONE', 'SKIPPED')),
+        completed_at TEXT,
+        note TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (account_id, day_number, sort_order)
+      );
+      CREATE INDEX idx_onboarding_tasks_account_day ON account_onboarding_tasks(account_id, day_number, status, sort_order);
+      CREATE INDEX idx_onboarding_tasks_completed ON account_onboarding_tasks(completed_at DESC);
+
+      CREATE TABLE manual_sessions (
+        id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        started_at TEXT NOT NULL,
+        ended_at TEXT,
+        duration_seconds INTEGER CHECK (duration_seconds IS NULL OR duration_seconds >= 0)
+      );
+      CREATE INDEX idx_manual_sessions_account ON manual_sessions(account_id, started_at DESC);
+      CREATE UNIQUE INDEX idx_manual_sessions_one_active ON manual_sessions(account_id) WHERE ended_at IS NULL;
     `]
   ];
 

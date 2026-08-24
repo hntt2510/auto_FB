@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AboutInfo, AccountApi, AccountOperationsSummary, AssignmentAccount, AssignmentMatrix, AuditLog, BackupInfo, CreateAccountInput, DashboardApi, DashboardSummary, DeleteAccountInput, Draft, DraftApi, DraftFilter, DraftInput, DraftMedia, DraftStatus, FacebookAccount, FacebookGroup, GroupApi, GroupFilter, GroupImportPreview, GroupImportResult, GroupInput, GroupOpenResult, GroupOperationsSummary, HealthCheckResult, LiveReadiness, LogApi, LogFilter, MediaReorderInput, OperationsApi, OrphanMediaScan, PlannerSummary, PreflightResult, ProxyImportPreview, ProxyTestInput, ProxyTestResult, PublishApi, PublishAttempt, PublishHistoryFilter, PublishingEngineStatus, PublishingHistoryRow, PublishingRunResult, PublishingSettings, PublishingSettingsApi, PublishingSettingsUpdate, QueueApi, QueueBatchActionInput, QueueBatchInput, QueueBatchRescheduleInput, QueueFilter, QueueItem, QueueOptions, QueuePreview, ReconciliationRecord, RequeueInput, SelectorProbeResult, StorageUsage, UpdateAccountInput } from '@shared/types';
+import type { AboutInfo, AccountApi, AccountOnboarding, AccountOperationsSummary, AssignmentAccount, AssignmentMatrix, AuditLog, BackupInfo, CreateAccountInput, DashboardApi, DashboardSummary, DeleteAccountInput, Draft, DraftApi, DraftFilter, DraftInput, DraftMedia, DraftStatus, FacebookAccount, FacebookGroup, GroupApi, GroupFilter, GroupImportPreview, GroupImportResult, GroupInput, GroupOpenResult, GroupOperationsSummary, HealthCheckResult, LiveReadiness, LogApi, LogFilter, ManualSession, MediaReorderInput, OnboardingApi, OnboardingOverview, OnboardingPlanTemplate, OnboardingStartInput, OnboardingTaskStatusInput, OnboardingTaskUpdateInput, OperationsApi, OrphanMediaScan, PlannerSummary, PreflightResult, ProxyImportPreview, ProxyTestInput, ProxyTestResult, PublishApi, PublishAttempt, PublishHistoryFilter, PublishingEngineStatus, PublishingHistoryRow, PublishingRunResult, PublishingSettings, PublishingSettingsApi, PublishingSettingsUpdate, QueueApi, QueueBatchActionInput, QueueBatchInput, QueueBatchRescheduleInput, QueueFilter, QueueItem, QueueOptions, QueuePreview, ReconciliationRecord, RequeueInput, SelectorProbeResult, StorageUsage, UpdateAccountInput, WarmUpTask } from '@shared/types';
 
 type IpcResponse<T> = { ok: true; data: T } | { ok: false; error: { code: string; message: string } };
 
@@ -83,6 +83,12 @@ const queueApi: QueueApi = {
 };
 
 const dashboardApi: DashboardApi = { summary: () => invoke<DashboardSummary>('dashboard:summary') };
+const onboardingApi: OnboardingApi = {
+  templates: () => invoke<OnboardingPlanTemplate[]>('onboarding:templates'), overview: () => invoke<OnboardingOverview>('onboarding:overview'), get: (accountId: string) => invoke<AccountOnboarding>('onboarding:get', accountId),
+  start: (input: OnboardingStartInput) => invoke<AccountOnboarding>('onboarding:start', input), pause: (accountId: string, reason?: string) => invoke<AccountOnboarding>('onboarding:pause', { accountId, reason }), resume: (accountId: string) => invoke<AccountOnboarding>('onboarding:resume', accountId), markReady: (accountId: string) => invoke<AccountOnboarding>('onboarding:ready', accountId), updateNotes: (accountId: string, notes: string) => invoke<AccountOnboarding>('onboarding:notes', { accountId, notes }),
+  updateTask: (input: OnboardingTaskUpdateInput) => invoke<WarmUpTask>('onboarding:update-task', input), setTaskStatus: (input: OnboardingTaskStatusInput) => invoke<WarmUpTask>('onboarding:task-status', input), startSession: (accountId: string) => invoke<ManualSession>('onboarding:start-session', accountId), stopSession: (accountId: string) => invoke<ManualSession>('onboarding:stop-session', accountId),
+  onChanged: (listener: () => void) => { const callback = () => listener(); ipcRenderer.on('onboarding:changed', callback); return () => ipcRenderer.removeListener('onboarding:changed', callback); }
+};
 
 const publishApi: PublishApi = {
   status: () => invoke<PublishingEngineStatus>('publishing:status'),
@@ -135,6 +141,7 @@ contextBridge.exposeInMainWorld('groupApi', groupApi);
 contextBridge.exposeInMainWorld('draftApi', draftApi);
 contextBridge.exposeInMainWorld('queueApi', queueApi);
 contextBridge.exposeInMainWorld('dashboardApi', dashboardApi);
+contextBridge.exposeInMainWorld('onboardingApi', onboardingApi);
 contextBridge.exposeInMainWorld('publishApi', publishApi);
 contextBridge.exposeInMainWorld('settingsApi', settingsApi);
 contextBridge.exposeInMainWorld('operationsApi', operationsApi);

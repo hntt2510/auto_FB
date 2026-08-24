@@ -1,4 +1,5 @@
 import type { BrowserContext, Page } from 'playwright';
+import { existsSync } from 'node:fs';
 import type { AccountRepository } from '@main/db/repositories/AccountRepository';
 import type { AuditLogRepository } from '@main/db/repositories/AuditLogRepository';
 import { AppError, sanitizeMessage } from '@main/errors';
@@ -31,7 +32,8 @@ export class BrowserManager {
     private readonly secrets: SecretStore,
     private readonly audit: AuditLogRepository,
     private readonly notify: () => void,
-    launcher?: PersistentContextLauncher
+    launcher?: PersistentContextLauncher,
+    private readonly facebookHomeUrl = 'https://www.facebook.com/'
   ) {
     this.launchPersistentContext = launcher ?? ((profileDirectory, options) => this.launchWithPlaywright(profileDirectory, options));
   }
@@ -132,7 +134,7 @@ export class BrowserManager {
     try {
       const page = await this.getPage(entry.context);
       try {
-        await page.goto('https://www.facebook.com/', { waitUntil: 'domcontentloaded', timeout: 45000 });
+        await page.goto(this.facebookHomeUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
       } catch (error) {
         if (account.proxyEnabled && this.isProxyError(error)) {
           const proxyError = this.proxyLaunchError(error); result = { accountId, status: 'ERROR', checkedAt: new Date().toISOString(), reason: proxyError.message };
@@ -199,7 +201,7 @@ export class BrowserManager {
       this.contexts.set(account.id, entry);
       context.on('close', () => { void this.finalizeClose(account.id, entry!, !entry!.startupFailure); });
       const page = await this.getPage(context);
-      await page.goto('https://www.facebook.com/', { waitUntil: 'domcontentloaded', timeout: 45000 });
+      await page.goto(this.facebookHomeUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
       this.accounts.setOpened(account.id, new Date().toISOString());
       this.auditSafely({ accountId: account.id, eventType: 'BROWSER_STARTED', message: temporary ? 'Persistent browser started for health check.' : 'Persistent browser started.' });
       this.notifySafely();
@@ -248,7 +250,12 @@ export class BrowserManager {
 
   private async launchWithPlaywright(profileDirectory: string, options: LaunchOptions): Promise<BrowserContext> {
     process.env.PLAYWRIGHT_BROWSERS_PATH ??= '0';
-    return (await import('playwright')).chromium.launchPersistentContext(profileDirectory, options);
+    const { chromium } = await import('playwright');
+    const launchOptions = { ...options };
+    const bundledPath = chromium.executablePath();
+    const unpackedPath = bundledPath.replace('app.asar', 'app.asar.unpacked');
+    if (unpackedPath !== bundledPath && existsSync(unpackedPath)) launchOptions.executablePath = unpackedPath;
+    return chromium.launchPersistentContext(profileDirectory, launchOptions);
   }
 
   private enqueue<T>(accountId: string, operation: () => Promise<T>): Promise<T> {

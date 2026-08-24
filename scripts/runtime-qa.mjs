@@ -1,4 +1,4 @@
-/* global process, console, setTimeout, window */
+/* global process, console, setTimeout, window, document */
 import { _electron as electron } from "playwright";
 import electronPath from "electron";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -15,6 +15,9 @@ const errors = [];
 let activeApplication;
 let proxyServer;
 let proxyPort;
+let browserServer;
+let browserPort;
+let browserFixtureMode = "READY";
 const proxyFixtureEvents = [];
 const proxyUsername = "qa-provider-user";
 const proxyPassword = "qa-fixture-password";
@@ -27,7 +30,7 @@ async function launch() {
     executablePath: packagedExecutable ?? electronPath,
     args: packagedExecutable ? [] : ["."],
     cwd: process.cwd(),
-    env: { ...process.env, FB_ACCOUNT_MANAGER_USER_DATA: userData, FB_PROXY_TEST_ENDPOINTS: `http://proxy-test.invalid/ip` },
+    env: { ...process.env, FB_ACCOUNT_MANAGER_USER_DATA: userData, FB_PROXY_TEST_ENDPOINTS: `http://proxy-test.invalid/ip`, FB_BROWSER_HOME_URL: `http://127.0.0.1:${browserPort}/facebook` },
   });
   activeApplication = application;
   const page = await application.firstWindow();
@@ -59,6 +62,11 @@ async function startProxyFixture() {
   proxyPort = proxyServer.address().port;
 }
 
+async function startBrowserFixture() {
+  browserServer = createServer((_request, response) => { const body = browserFixtureMode === "CHECKPOINT" ? '<html><body>Checkpoint security verification. Manual user action required.</body></html>' : '<html><body><nav role="navigation">Home Notifications</nav><main>Local Facebook readiness fixture</main></body></html>'; response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" }); response.end(body); });
+  await new Promise((resolveListen, rejectListen) => { browserServer.once("error", rejectListen); browserServer.listen(0, "127.0.0.1", resolveListen); }); browserPort = browserServer.address().port;
+}
+
 async function open(page, label) {
   await page.getByRole("button", { name: new RegExp(label) }).click();
   await page
@@ -77,11 +85,13 @@ async function open(page, label) {
 
 try {
   await startProxyFixture();
+  await startBrowserFixture();
   const first = await launch();
   const { page } = first;
   for (const label of [
     "Dashboard",
     "Accounts",
+    "Account Onboarding",
     "Groups",
     "Drafts",
     "Queue",
@@ -137,6 +147,7 @@ try {
       videoUploadTimeoutSeconds: 600,
       maxJobsPerSchedulerSession: 3,
       canaryMode: true,
+      requireReadyAccounts: true,
     }),
   );
   await open(page, "Accounts");
@@ -213,6 +224,38 @@ try {
     });
     return { accountId: account.id, groupId: group.id };
   });
+  await open(page, "Account Onboarding");
+  await page.locator(".onboarding-account").filter({ hasText: "QA Account" }).click();
+  await page.getByRole("button", { name: "Start onboarding" }).click();
+  await page.waitForTimeout(500);
+  assert((await page.locator(".onboarding-detail").innerText()).includes("WARMING"), `Onboarding did not start: ${await page.locator("body").innerText()}`);
+  await page.locator(".warmup-task.today").first().getByRole("button", { name: "Done" }).click();
+  await page.getByRole("button", { name: "Start session" }).click();
+  await page.waitForTimeout(1100);
+  await page.getByRole("button", { name: "Stop session" }).click();
+  await page.locator(".onboarding-toolbar").getByRole("button", { name: "Open Facebook", exact: true }).click();
+  try {
+    await page.waitForFunction(() => document.body.innerText.includes("Close browser") || Boolean(document.querySelector(".notice.error")), undefined, { timeout: 60_000 });
+  } catch (error) {
+    const state = await page.evaluate(async (accountId) => ({ account: await window.accountApi.list().then((accounts) => accounts.find((account) => account.id === accountId)), body: document.body.innerText }), seeded.accountId);
+    throw new Error(`Persistent browser wait failed: ${error instanceof Error ? error.message : String(error)}\nAccount: ${JSON.stringify(state.account)}\nUI: ${state.body}`);
+  }
+  assert((await page.locator("body").innerText()).includes("Close browser"), `Persistent browser did not open: ${await page.locator("body").innerText()}`);
+  browserFixtureMode = "CHECKPOINT";
+  await page.locator(".warmup-task").filter({ hasText: "Verify session health" }).getByRole("button", { name: "Health check" }).click();
+  await page.getByText("PAUSED", { exact: true }).first().waitFor();
+  browserFixtureMode = "READY";
+  await page.locator(".warmup-task").filter({ hasText: "Verify session health" }).getByRole("button", { name: "Health check" }).click();
+  await page.getByText("Health check: READY", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Resume warm-up" }).click();
+  await page.waitForTimeout(500);
+  assert((await page.locator(".onboarding-detail").innerText()).includes("WARMING"), `Onboarding did not resume: ${await page.locator("body").innerText()}`);
+  await page.getByRole("button", { name: "Close browser" }).click();
+  page.once("dialog", (dialog) => void dialog.accept());
+  await page.getByRole("button", { name: "Mark READY" }).click();
+  await page.getByText("READY", { exact: true }).first().waitFor();
+  const onboardingRuntime = await page.evaluate((accountId) => window.onboardingApi.get(accountId), seeded.accountId);
+  assert(onboardingRuntime.account.onboardingStatus === "READY" && onboardingRuntime.completedTasks >= 1 && onboardingRuntime.sessions[0].durationSeconds >= 1, "Onboarding checklist/session lifecycle failed.");
   await open(page, "Dashboard");
   await page.getByText("Scheduled today", { exact: true }).waitFor();
   assert(
@@ -220,6 +263,7 @@ try {
       .scheduled === 2,
     "Dashboard counters did not use real queue data.",
   );
+  assert((await page.evaluate(() => window.dashboardApi.summary())).onboarding.ready === 1, "Dashboard onboarding counters did not update.");
   await open(page, "Planner");
   await page.getByText("ACCOUNT SCHEDULE CONFLICT").first().waitFor();
   await open(page, "Queue");
@@ -244,7 +288,7 @@ try {
     groupOps: await window.groupApi.operations(),
   }));
   assert(
-    maintenance.backup.schemaVersion === 5,
+    maintenance.backup.schemaVersion === 6,
     "Backup schema validation failed.",
   );
   assert(
@@ -267,12 +311,13 @@ try {
   await first.application.close();
   activeApplication = undefined;
   const second = await launch();
-  const persisted = await second.page.evaluate(async () => ({
+  const persisted = await second.page.evaluate(async (onboardingAccountId) => ({
     queue: await window.queueApi.list({}),
     status: await window.publishApi.status(),
     settings: await window.settingsApi.getPublishing(),
     accounts: await window.accountApi.list(),
-  }));
+    onboarding: await window.onboardingApi.get(onboardingAccountId),
+  }), seeded.accountId);
   assert(persisted.queue.length === 2, "Queue did not persist across restart.");
   assert(
     persisted.status.schedulerState === "DISARMED",
@@ -282,6 +327,8 @@ try {
     persisted.settings.maxJobsPerSchedulerSession === 3,
     "Scheduler session cap setting did not persist.",
   );
+  assert(persisted.settings.requireReadyAccounts === true, "READY scheduler gate setting did not persist.");
+  assert(persisted.onboarding.account.onboardingStatus === "READY" && persisted.onboarding.sessions.length === 1, "Onboarding state did not persist across restart.");
   const persistedProxy = persisted.accounts.find((account) => account.name === "QA Proxy Account");
   assert(persistedProxy?.proxyPasswordSaved === true && !persistedProxy.proxyPasswordKey, "Encrypted proxy credential did not persist safely.");
   const restartProxyTest = await second.page.evaluate((account) => window.accountApi.testProxy({ accountId: account.id, proxyProtocol: account.proxyProtocol, proxyHost: account.proxyHost, proxyPort: account.proxyPort, proxyUsername: account.proxyUsername }), persistedProxy);
@@ -308,6 +355,7 @@ try {
         "sanitized exports",
         "fixed proxy parser/test/status",
         "encrypted proxy credential restart",
+        "manual onboarding checklist/session/health pause",
         "restart persistence",
       ],
     }),
@@ -318,6 +366,7 @@ try {
 } finally {
   try { await activeApplication?.close(); } catch { /* best effort */ }
   if (proxyServer) await new Promise((resolveClose) => proxyServer.close(resolveClose));
+  if (browserServer) await new Promise((resolveClose) => browserServer.close(resolveClose));
   await new Promise((resolveDelay) => setTimeout(resolveDelay, 250));
   try { rmSync(userData, { recursive: true, force: true }); } catch { /* Windows may release Chromium files shortly after exit */ }
 }

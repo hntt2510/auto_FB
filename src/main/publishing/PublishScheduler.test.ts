@@ -16,9 +16,10 @@ const live: PublishingSettings = {
   maxJobsPerSchedulerSession: 20,
   canaryMode: false,
 };
-function harness(overdue = 0, overrides: Partial<typeof live> = {}) {
+function harness(overdue = 0, overrides: Partial<typeof live> = {}, accountReady: (accountId: string) => boolean = () => true) {
   const due = Array.from({ length: overdue }, (_, index) => ({
     id: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+    accountId: `10000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
   }));
   const queue = {
     due: vi.fn(() => due),
@@ -44,6 +45,7 @@ function harness(overdue = 0, overrides: Partial<typeof live> = {}) {
     coordinator as unknown as PublishCoordinator,
     settings as PublishingSettingsService,
     vi.fn(),
+    accountReady,
   );
   return { scheduler, queue, coordinator, current };
 }
@@ -130,5 +132,9 @@ describe("PublishScheduler operational state machine", () => {
     expect(scheduler.runtimeState()).toBe("DISARMED");
     expect(scheduler.reason()).toBe("SESSION_JOB_LIMIT_REACHED");
     expect(scheduler.completedThisSession()).toBe(3);
+  });
+  it("claims only explicitly READY accounts when the optional scheduler gate is enabled", async () => {
+    const { scheduler, coordinator } = harness(2, { requireReadyAccounts: true }, (accountId) => accountId.endsWith("000000000000")); scheduler.start(); scheduler.arm(true); const result = await scheduler.runDue();
+    expect(coordinator.run.mock.calls[0][0]).toHaveLength(1); expect(result).toEqual({ requested: 2, claimed: 1, completed: 1, skipped: 1 });
   });
 });

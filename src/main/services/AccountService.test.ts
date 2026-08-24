@@ -16,7 +16,7 @@ function makeAccount(overrides: Partial<FacebookAccount> = {}): FacebookAccount 
   const now = new Date().toISOString();
   return { id: accountId, name: 'FB01', profileName: 'fb01', profileDirectory: 'C:/profiles/fb01', proxyEnabled: true,
     proxyProtocol: 'HTTP', proxyHost: 'proxy.example.com', proxyPort: 8080, proxyUsername: 'user', proxyPasswordKey: 'old-key', proxyStatus: 'UNTESTED', status: 'STOPPED',
-    createdAt: now, updatedAt: now, ...overrides };
+    createdAt: now, updatedAt: now, ...overrides, onboardingStatus: overrides.onboardingStatus ?? 'NEW' };
 }
 
 function setup(updateResult?: (fields: Record<string, unknown>) => FacebookAccount) {

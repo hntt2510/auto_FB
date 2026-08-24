@@ -4,6 +4,7 @@ export type RendererBridge = {
   appBridge?: AppBridge;
   accountApi?: { list?: unknown; onChanged?: unknown };
   dashboardApi?: { summary?: unknown };
+  onboardingApi?: { overview?: unknown; onChanged?: unknown };
   publishApi?: { status?: unknown; onChanged?: unknown };
   groupApi?: { list?: unknown };
   draftApi?: { list?: unknown };
@@ -18,6 +19,8 @@ export function isOperationalBridge(value: RendererBridge | undefined): boolean 
     typeof value.accountApi?.list === 'function' &&
     typeof value.accountApi?.onChanged === 'function' &&
     typeof value.dashboardApi?.summary === 'function' &&
+    typeof value.onboardingApi?.overview === 'function' &&
+    typeof value.onboardingApi?.onChanged === 'function' &&
     typeof value.publishApi?.status === 'function' &&
     typeof value.publishApi?.onChanged === 'function' &&
     typeof value.groupApi?.list === 'function' &&

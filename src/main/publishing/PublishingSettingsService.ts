@@ -5,7 +5,7 @@ import { publishingSettingsSchema, publishingSettingsUpdateSchema } from '@share
 import type { PublishingSettings, PublishingSettingsUpdate } from '@shared/types';
 
 const KEY = 'publishing:settings';
-export const DEFAULT_PUBLISHING_SETTINGS: PublishingSettings = { enabled: false, executionMode: 'DRY_RUN', schedulerIntervalSeconds: 30, maxConcurrentAccounts: 2, videoUploadTimeoutSeconds: 600, maxJobsPerSchedulerSession: 20, canaryMode: true };
+export const DEFAULT_PUBLISHING_SETTINGS: PublishingSettings = { enabled: false, executionMode: 'DRY_RUN', schedulerIntervalSeconds: 30, maxConcurrentAccounts: 2, videoUploadTimeoutSeconds: 600, maxJobsPerSchedulerSession: 20, canaryMode: true, requireReadyAccounts: false };
 
 export class PublishingSettingsService {
   constructor(private readonly settings: SettingsRepository, private readonly audit: AuditLogRepository, private readonly onChanged: (settings: PublishingSettings) => void) {}

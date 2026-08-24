@@ -6,6 +6,7 @@ const bridge = {
   appBridge: { available: true as const, version: '1' },
   accountApi: { list: () => Promise.resolve([]), onChanged: () => () => undefined },
   dashboardApi: { summary: () => Promise.resolve(undefined) },
+  onboardingApi: { overview: () => Promise.resolve(undefined), onChanged: () => () => undefined },
   publishApi: { status: () => Promise.resolve(undefined), onChanged: () => () => undefined },
   groupApi: { list: () => Promise.resolve([]) },
   draftApi: { list: () => Promise.resolve([]) },

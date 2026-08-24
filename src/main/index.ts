@@ -38,6 +38,9 @@ import { broadcastPublishingChanged } from './ipc/publishing.ipc';
 import { OperationsService } from './services/OperationsService';
 import { LATEST_SCHEMA_VERSION } from './db/migrations';
 import { ProxyTestService } from './proxy/ProxyTestService';
+import { OnboardingRepository } from './db/repositories/OnboardingRepository';
+import { OnboardingService } from './services/OnboardingService';
+import { broadcastOnboardingChanged } from './ipc/onboarding.ipc';
 
 let service: AccountService | undefined;
 let cleanupIpc: (() => void) | undefined;
@@ -71,18 +74,19 @@ if (!gotLock) {
     const publishRepository = new PublishRepository(database);
     const liveReadiness = new LiveReadinessService(accounts, groups, publishRepository, media);
     const diagnostics = new PublishDiagnostics(paths.diagnostics);
+    const workspaceNotify = () => { broadcastPublishingChanged(); };
+    const onboarding = new OnboardingService(new OnboardingRepository(database), accounts, groups, audit, () => { if (service) broadcastAccounts(service); broadcastOnboardingChanged(); workspaceNotify(); });
     service = new AccountService(accounts, audit, profiles, new SecretStore(settings, {
       isEncryptionAvailable: () => safeStorage.isEncryptionAvailable(),
       encryptString: (value) => safeStorage.encryptString(value),
       decryptString: (value) => safeStorage.decryptString(value)
-    }), () => { if (service) broadcastAccounts(service); }, new ProxyTestService(proxyTestEndpoints()));
+    }), () => { const paused = onboarding?.syncHealthPauses() ?? 0; if (service) broadcastAccounts(service); if (paused) { broadcastOnboardingChanged(); workspaceNotify(); } }, new ProxyTestService(proxyTestEndpoints()), browserHomeUrl());
     cleanupIpc = registerIpc(service, () => new Set(BrowserWindow.getAllWindows().map((current) => current.webContents.id)));
     registerMediaProtocol(drafts, media);
-    const workspaceNotify = () => { broadcastPublishingChanged(); };
     const executor = new PublishExecutor(queue, publishRepository, accounts, groups, profiles, service.browser, new FacebookPublisher(new FacebookComposerAdapter(), media), diagnostics, audit, workspaceNotify, liveReadiness);
     coordinator = new PublishCoordinator(queue, executor);
     const publishingSettings = new PublishingSettingsService(settings, audit, () => { scheduler?.reconfigure(); workspaceNotify(); });
-    scheduler = new PublishScheduler(queue, coordinator, publishingSettings, workspaceNotify);
+    scheduler = new PublishScheduler(queue, coordinator, publishingSettings, workspaceNotify, (accountId) => accounts.get(accountId)?.onboardingStatus === 'READY');
     const operationsReport = new OperationsReportService(accounts, queue, publishRepository, publishingSettings, executor.selectorVersion, app.getVersion(), scheduler);
     publishing = new PublishingService(queue, publishRepository, accounts, groups, media, executor, coordinator, scheduler, publishingSettings, diagnostics, audit, workspaceNotify, liveReadiness, operationsReport);
     publishing.recover(); service.setHealthObserver((result) => publishing?.handleHealthResult(result)); scheduler.start();
@@ -94,6 +98,7 @@ if (!gotLock) {
       drafts: new DraftService(drafts, queue, media, audit, workspaceNotify),
       queue: new QueueService(queue, drafts, accounts, groups, media, audit, workspaceNotify),
       dashboard: new DashboardService(database, publishingSettings),
+      onboarding,
       publishing,
       settings: publishingSettings,
       operations
@@ -164,3 +169,5 @@ function proxyTestEndpoints(): string[] | undefined {
   if (!endpoints.length || endpoints.some((value) => { try { return !['http:', 'https:'].includes(new URL(value).protocol); } catch { return true; } })) return undefined;
   return endpoints;
 }
+
+function browserHomeUrl(): string | undefined { const configured = process.env.FB_BROWSER_HOME_URL; if (!configured) return undefined; try { const url = new URL(configured); return ['http:', 'https:'].includes(url.protocol) ? url.toString() : undefined; } catch { return undefined; } }

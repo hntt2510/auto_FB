@@ -4,7 +4,7 @@ import type { SecretStore } from '@main/security/SecretStore';
 import { buildPlaywrightProxy, buildProxyOptions, sanitizeProxyError } from './ProxyConfiguration';
 
 function account(protocol: FacebookAccount['proxyProtocol']): FacebookAccount {
-  return { id: '11111111-1111-4111-8111-111111111111', name: 'Proxy account', profileName: 'proxy-account', profileDirectory: 'C:/profiles/proxy-account', proxyEnabled: true, proxyProtocol: protocol, proxyHost: 'proxy.example.com', proxyPort: 9000, proxyUsername: 'provider-zone-us', proxyPasswordKey: 'opaque-key', proxyStatus: 'UNTESTED', status: 'STOPPED', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' };
+  return { id: '11111111-1111-4111-8111-111111111111', name: 'Proxy account', profileName: 'proxy-account', profileDirectory: 'C:/profiles/proxy-account', proxyEnabled: true, proxyProtocol: protocol, proxyHost: 'proxy.example.com', proxyPort: 9000, proxyUsername: 'provider-zone-us', proxyPasswordKey: 'opaque-key', proxyStatus: 'UNTESTED', onboardingStatus: 'NEW', status: 'STOPPED', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' };
 }
 
 describe('Playwright proxy configuration', () => {

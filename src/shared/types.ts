@@ -12,6 +12,10 @@ export type AccountStatus = (typeof ACCOUNT_STATUSES)[number];
 export type HealthStatus = 'READY' | 'LOGIN_REQUIRED' | 'CHECKPOINT' | 'ERROR';
 export type ProxyProtocol = 'HTTP' | 'HTTPS' | 'SOCKS5';
 export type ProxyStatus = 'NOT_CONFIGURED' | 'UNTESTED' | 'WORKING' | 'FAILED';
+export type OnboardingStatus = 'NEW' | 'WARMING' | 'READY' | 'PAUSED';
+export type WarmUpTaskStatus = 'PENDING' | 'DONE' | 'SKIPPED';
+export type WarmUpTaskType = 'MANUAL_TASK' | 'OPEN_FACEBOOK' | 'OPEN_GROUP' | 'HEALTH_CHECK';
+export type OnboardingTemplateId = 'BASIC_3_DAY' | 'BASIC_5_DAY';
 
 export type FacebookAccount = {
   id: string;
@@ -30,6 +34,12 @@ export type FacebookAccount = {
   lastProxyTestIp?: string;
   lastProxyLatencyMs?: number;
   lastProxyError?: string;
+  onboardingStatus: OnboardingStatus;
+  onboardingStartedAt?: string;
+  onboardingPlanDays?: number;
+  onboardingPausedReason?: string;
+  onboardingNotes?: string;
+  lastManualSessionAt?: string;
   status: AccountStatus;
   lastHealthStatus?: HealthStatus;
   lastOpenedAt?: string;
@@ -71,6 +81,10 @@ export type ApiErrorCode =
   | 'PROXY_DNS_FAILED'
   | 'PROXY_UNSUPPORTED'
   | 'PROXY_TEST_FAILED'
+  | 'ONBOARDING_NOT_FOUND'
+  | 'ONBOARDING_INVALID_STATE'
+  | 'ONBOARDING_TASK_NOT_FOUND'
+  | 'MANUAL_SESSION_ACTIVE'
   | 'BROWSER_LAUNCH_FAILED'
   | 'BROWSER_NAVIGATION_FAILED'
   | 'DATABASE_ERROR'
@@ -167,6 +181,16 @@ export type ParsedProxyInput = ProxyConfigurationInput;
 export type ProxyImportRow = { line: number; display: string; status: 'VALID' | 'INVALID'; proxy?: Omit<ParsedProxyInput, 'proxyPassword'> & { hasPassword: boolean }; reason?: string };
 export type ProxyImportPreview = { valid: number; invalid: number; rows: ProxyImportRow[] };
 
+export type WarmUpTask = { id: string; accountId: string; dayNumber: number; sortOrder: number; type: WarmUpTaskType; groupId?: string; groupName?: string; title: string; description: string; status: WarmUpTaskStatus; completedAt?: string; note?: string; createdAt: string; updatedAt: string };
+export type ManualSession = { id: string; accountId: string; startedAt: string; endedAt?: string; durationSeconds?: number };
+export type OnboardingPlanTemplate = { id: OnboardingTemplateId; name: string; days: number; description: string };
+export type AccountOnboarding = { account: FacebookAccount; currentDay?: number; completedTasks: number; skippedTasks: number; pendingTasks: number; tasks: WarmUpTask[]; sessions: ManualSession[]; activeSession?: ManualSession };
+export type OnboardingOverview = { counts: Record<OnboardingStatus, number>; todayTasks: WarmUpTask[]; completedToday: number; pausedAccounts: FacebookAccount[]; accounts: Array<{ account: FacebookAccount; currentDay?: number; completedTasks: number; totalTasks: number }> };
+export type OnboardingStartInput = { accountId: string; templateId: OnboardingTemplateId };
+export type OnboardingTaskUpdateInput = { taskId: string; title: string; description: string; groupId?: string };
+export type OnboardingTaskStatusInput = { taskId: string; status: WarmUpTaskStatus; note?: string };
+export type OnboardingApi = { templates: () => Promise<OnboardingPlanTemplate[]>; overview: () => Promise<OnboardingOverview>; get: (accountId: string) => Promise<AccountOnboarding>; start: (input: OnboardingStartInput) => Promise<AccountOnboarding>; pause: (accountId: string, reason?: string) => Promise<AccountOnboarding>; resume: (accountId: string) => Promise<AccountOnboarding>; markReady: (accountId: string) => Promise<AccountOnboarding>; updateNotes: (accountId: string, notes: string) => Promise<AccountOnboarding>; updateTask: (input: OnboardingTaskUpdateInput) => Promise<WarmUpTask>; setTaskStatus: (input: OnboardingTaskStatusInput) => Promise<WarmUpTask>; startSession: (accountId: string) => Promise<ManualSession>; stopSession: (accountId: string) => Promise<ManualSession>; onChanged: (listener: () => void) => () => void };
+
 export type DeleteAccountInput = {
   accountId: string;
   deleteProfile: boolean;
@@ -191,7 +215,7 @@ export type LogApi = {
   list: (filter?: LogFilter) => Promise<AuditLog[]>;
 };
 
-export type WindowApi = { accountApi: AccountApi; logApi: LogApi; groupApi: GroupApi; draftApi: DraftApi; queueApi: QueueApi; dashboardApi: DashboardApi; publishApi: PublishApi; settingsApi: PublishingSettingsApi; operationsApi: OperationsApi };
+export type WindowApi = { accountApi: AccountApi; logApi: LogApi; groupApi: GroupApi; draftApi: DraftApi; queueApi: QueueApi; dashboardApi: DashboardApi; onboardingApi: OnboardingApi; publishApi: PublishApi; settingsApi: PublishingSettingsApi; operationsApi: OperationsApi };
 export type AppBridge = { available: true; version: string };
 
 export type FacebookGroup = {
@@ -289,6 +313,7 @@ export type DashboardSummary = {
   publishing: { enabled: boolean; running: number; succeededToday: number; failedToday: number; needsAttention: number };
   today: { scheduled: number; due: number; running: number; submitted: number; succeeded: number; failed: number; needsAttention: number };
   accountStatuses: { ready: number; loginRequired: number; checkpoint: number; blocked: number; unknown: number };
+  onboarding: { new: number; warming: number; ready: number; paused: number; todayTasks: number };
   recentPublishing: PublishingHistoryRow[];
   attention: QueueItem[];
   recentQueue: QueueItem[];
@@ -343,7 +368,7 @@ export type QueueApi = {
 
 export type DashboardApi = { summary: () => Promise<DashboardSummary> };
 
-export type PublishingSettings = { enabled: boolean; executionMode: ExecutionMode; schedulerIntervalSeconds: number; maxConcurrentAccounts: number; videoUploadTimeoutSeconds: number; maxJobsPerSchedulerSession: number; canaryMode?: boolean };
+export type PublishingSettings = { enabled: boolean; executionMode: ExecutionMode; schedulerIntervalSeconds: number; maxConcurrentAccounts: number; videoUploadTimeoutSeconds: number; maxJobsPerSchedulerSession: number; canaryMode?: boolean; requireReadyAccounts?: boolean };
 export type PublishingBlock = { accountId: string; accountName: string; reason: 'LOGIN_REQUIRED' | 'CHECKPOINT'; message: string; blockedAt: string };
 export type PublishingRunResult = { requested: number; claimed: number; completed: number; skipped: number };
 export type PublishingReadiness = 'NOT_READY' | 'PREFLIGHT_READY' | 'LIVE_ENABLED' | 'DEGRADED';
@@ -400,4 +425,4 @@ export type OrphanMediaScan = { candidateIds: string[]; candidateCount: number; 
 export type AboutInfo = { appName: string; appVersion: string; databaseSchema: number; selectorVersion: string; electronVersion: string; playwrightVersion: string };
 export type OperationsApi = { history: (filter?: PublishHistoryFilter) => Promise<PublishingHistoryRow[]>; exportHistoryCsv: (filter?: PublishHistoryFilter) => Promise<string | undefined>; listBackups: () => Promise<BackupInfo[]>; createBackup: () => Promise<BackupInfo>; restoreBackup: (backupId: string) => Promise<void>; storageUsage: () => Promise<StorageUsage>; cleanDiagnostics: () => Promise<number>; scanOrphanMedia: () => Promise<OrphanMediaScan>; cleanOrphanMedia: (candidateIds: string[]) => Promise<number>; about: () => Promise<AboutInfo> };
 
-export type WorkspaceApi = { groupApi: GroupApi; draftApi: DraftApi; queueApi: QueueApi; dashboardApi: DashboardApi; publishApi: PublishApi; settingsApi: PublishingSettingsApi; operationsApi: OperationsApi };
+export type WorkspaceApi = { groupApi: GroupApi; draftApi: DraftApi; queueApi: QueueApi; dashboardApi: DashboardApi; onboardingApi: OnboardingApi; publishApi: PublishApi; settingsApi: PublishingSettingsApi; operationsApi: OperationsApi };

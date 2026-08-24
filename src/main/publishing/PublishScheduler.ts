@@ -11,7 +11,7 @@ export class PublishScheduler {
   private sessionCompleted = 0;
   private stopReason?: SchedulerStopReason;
 
-  constructor(private readonly queue: QueueRepository, private readonly coordinator: PublishCoordinator, private readonly settings: PublishingSettingsService, private readonly onChanged: () => void) {}
+  constructor(private readonly queue: QueueRepository, private readonly coordinator: PublishCoordinator, private readonly settings: PublishingSettingsService, private readonly onChanged: () => void, private readonly accountReady: (accountId: string) => boolean = () => true) {}
 
   start(): void { if (this.started) return; this.started = true; this.state = 'DISARMED'; this.stopReason = undefined; this.onChangedSafe(); }
   stop(): void { this.started = false; this.transitionDisarmed('APPLICATION_SHUTDOWN'); }
@@ -44,9 +44,9 @@ export class PublishScheduler {
   failStopping(reason: Extract<SchedulerStopReason, 'STOP_DRAIN_TIMEOUT' | 'STOP_DRAIN_FAILED'>): void { if (this.state !== 'STOPPING') throw new Error('Scheduler is not stopping.'); this.transitionDisarmed(reason); }
 
   async runDue(): Promise<PublishingRunResult> {
-    const settings = this.settings.get(); const limit = Math.max(0, (settings.maxJobsPerSchedulerSession ?? 20) - this.sessionCompleted); const allDue = this.queue.due(new Date().toISOString());
+    const settings = this.settings.get(); const limit = Math.max(0, (settings.maxJobsPerSchedulerSession ?? 20) - this.sessionCompleted); const allDue = this.queue.due(new Date().toISOString()); const eligible = settings.requireReadyAccounts ? allDue.filter((item) => Boolean(item.accountId && this.accountReady(item.accountId))) : allDue;
     if (this.state !== 'ARMED' || settings.canaryMode !== false || settings.executionMode !== 'LIVE' || !settings.enabled || limit === 0) return { requested: allDue.length, claimed: 0, completed: 0, skipped: allDue.length };
-    const selected = allDue.slice(0, limit).map((item) => item.id); const result = await this.coordinator.run(selected, settings); this.recordCompleted(result.completed);
+    const selected = eligible.slice(0, limit).map((item) => item.id); const result = await this.coordinator.run(selected, settings); this.recordCompleted(result.completed);
     return { ...result, requested: allDue.length, skipped: result.skipped + Math.max(0, allDue.length - selected.length) };
   }
 

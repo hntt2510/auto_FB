@@ -22,10 +22,11 @@ export class AccountService {
     private readonly profiles: ProfileManager,
     private readonly secrets: SecretStore,
     private readonly onChanged: () => void,
-    proxyTester?: ProxyTestService
+    proxyTester?: ProxyTestService,
+    browserHomeUrl?: string
   ) {
     this.accounts.normalizeRuntimeStatuses();
-    this.browser = new BrowserManager(accounts, profiles, secrets, audit, onChanged);
+    this.browser = new BrowserManager(accounts, profiles, secrets, audit, onChanged, undefined, browserHomeUrl);
     this.proxyTester = proxyTester ?? new ProxyTestService();
   }
 

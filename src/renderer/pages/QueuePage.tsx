@@ -149,9 +149,9 @@ export function QueuePage({ accounts, onError }: Props) {
     const chosen = items.filter((item) => ids.includes(item.id));
     const accountCount = new Set(chosen.map((item) => item.accountId)).size;
     const groupCount = new Set(chosen.map((item) => item.groupId)).size;
-    let mode: "DRY_RUN" | "LIVE";
+    let mode: "DRY_RUN" | "LIVE"; let requireReadyAccounts = false;
     try {
-      mode = (await window.publishApi.status()).settings.executionMode;
+      const engine = await window.publishApi.status(); mode = engine.settings.executionMode; requireReadyAccounts = engine.settings.requireReadyAccounts === true;
     } catch (error) {
       onError(error);
       return;
@@ -160,9 +160,11 @@ export function QueuePage({ accounts, onError }: Props) {
       mode === "DRY_RUN"
         ? "run a preflight and stop before Post"
         : "click Facebook Post once per job";
+    const notReady = requireReadyAccounts ? chosen.filter((item) => accounts.find((account) => account.id === item.accountId)?.onboardingStatus !== "READY") : [];
+    const onboardingWarning = notReady.length ? `\n\nWarning: ${notReady.length} selected job(s) use accounts not marked READY in the operator onboarding plan. The READY setting gates scheduler claims only; this manual run is an explicit override.` : "";
     if (
       !window.confirm(
-        `Run ${chosen.length} job(s) across ${accountCount} account(s) and ${groupCount} group(s)? This will ${action}.`,
+        `Run ${chosen.length} job(s) across ${accountCount} account(s) and ${groupCount} group(s)? This will ${action}.${onboardingWarning}`,
       )
     )
       return;

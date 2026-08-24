@@ -28,7 +28,7 @@ function makeContext() {
 }
 
 function fixture(launcher: PersistentContextLauncher, overrides: Partial<FacebookAccount> = {}, secretGet = vi.fn()) {
-  let account: FacebookAccount = { id: accountId, name: 'FB01', profileName: 'fb01', profileDirectory: 'C:/profiles/fb01', proxyEnabled: false, proxyProtocol: 'HTTP', proxyStatus: 'NOT_CONFIGURED', status: 'STOPPED', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', ...overrides };
+  let account: FacebookAccount = { id: accountId, name: 'FB01', profileName: 'fb01', profileDirectory: 'C:/profiles/fb01', proxyEnabled: false, proxyProtocol: 'HTTP', proxyStatus: 'NOT_CONFIGURED', status: 'STOPPED', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', ...overrides, onboardingStatus: overrides.onboardingStatus ?? 'NEW' };
   const accounts = {
     get: vi.fn(() => account),
     setStatus: vi.fn((_id: string, status: FacebookAccount['status']) => { account = { ...account, status }; }),

@@ -143,6 +143,11 @@ export function SettingsPage({
           </span>
           <b>{value.canaryMode !== false ? "ON" : "OFF"}</b>
         </label>
+        <label className="engine-toggle">
+          <input type="checkbox" checked={value.requireReadyAccounts === true} onChange={(event) => setValue({ ...value, requireReadyAccounts: event.target.checked })} />
+          <span><strong>Require READY accounts for scheduler</strong><small>When enabled, scheduled jobs use only accounts explicitly marked READY in the operator onboarding plan. Manual single runs show a warning but remain explicit.</small></span>
+          <b>{value.requireReadyAccounts ? "ON" : "OFF"}</b>
+        </label>
         <label>
           Execution mode
           <select

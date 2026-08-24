@@ -1,10 +1,11 @@
 import type Database from 'better-sqlite3';
-import type { AccountOperationsSummary, AccountStatus, FacebookAccount, HealthStatus, OperationalHealthStatus, ProxyProtocol, ProxyStatus, ProxyTestResult, PublishingBlock } from '@shared/types';
+import type { AccountOperationsSummary, AccountStatus, FacebookAccount, HealthStatus, OnboardingStatus, OperationalHealthStatus, ProxyProtocol, ProxyStatus, ProxyTestResult, PublishingBlock } from '@shared/types';
 
 type AccountRow = {
   id: string; name: string; profile_name: string; profile_directory: string; proxy_enabled: number;
   proxy_protocol: ProxyProtocol; proxy_host: string | null; proxy_port: number | null; proxy_username: string | null; proxy_password_key: string | null;
   proxy_status: ProxyStatus; last_proxy_test_at: string | null; last_proxy_test_ip: string | null; last_proxy_latency_ms: number | null; last_proxy_error: string | null;
+  onboarding_status: OnboardingStatus; onboarding_started_at: string | null; onboarding_plan_days: number | null; onboarding_paused_reason: string | null; onboarding_notes: string | null; last_manual_session_at: string | null;
   status: AccountStatus; last_health_status: HealthStatus | null; last_opened_at: string | null;
   last_health_check_at: string | null; last_successful_login_at: string | null; last_error: string | null;
   created_at: string; updated_at: string;
@@ -16,13 +17,14 @@ function mapAccount(row: AccountRow): FacebookAccount {
     proxyEnabled: Boolean(row.proxy_enabled), proxyProtocol: row.proxy_protocol ?? 'HTTP', proxyHost: row.proxy_host ?? undefined, proxyPort: row.proxy_port ?? undefined,
     proxyUsername: row.proxy_username ?? undefined, proxyPasswordKey: row.proxy_password_key ?? undefined,
     proxyStatus: row.proxy_status ?? (row.proxy_enabled ? 'UNTESTED' : 'NOT_CONFIGURED'), lastProxyTestAt: row.last_proxy_test_at ?? undefined, lastProxyTestIp: row.last_proxy_test_ip ?? undefined, lastProxyLatencyMs: row.last_proxy_latency_ms ?? undefined, lastProxyError: row.last_proxy_error ?? undefined,
+    onboardingStatus: row.onboarding_status ?? 'NEW', onboardingStartedAt: row.onboarding_started_at ?? undefined, onboardingPlanDays: row.onboarding_plan_days ?? undefined, onboardingPausedReason: row.onboarding_paused_reason ?? undefined, onboardingNotes: row.onboarding_notes ?? undefined, lastManualSessionAt: row.last_manual_session_at ?? undefined,
     status: row.status, lastHealthStatus: row.last_health_status ?? undefined, lastOpenedAt: row.last_opened_at ?? undefined,
     lastHealthCheckAt: row.last_health_check_at ?? undefined, lastSuccessfulLoginAt: row.last_successful_login_at ?? undefined,
     lastError: row.last_error ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at
   };
 }
 
-export type AccountInsert = Omit<FacebookAccount, 'proxyProtocol' | 'proxyStatus' | 'lastProxyTestAt' | 'lastProxyTestIp' | 'lastProxyLatencyMs' | 'lastProxyError' | 'status' | 'lastHealthStatus' | 'lastOpenedAt' | 'lastHealthCheckAt' | 'lastSuccessfulLoginAt' | 'lastError' | 'createdAt' | 'updatedAt'> & { proxyProtocol?: ProxyProtocol; createdAt: string; updatedAt: string };
+export type AccountInsert = Omit<FacebookAccount, 'proxyProtocol' | 'proxyStatus' | 'lastProxyTestAt' | 'lastProxyTestIp' | 'lastProxyLatencyMs' | 'lastProxyError' | 'onboardingStatus' | 'onboardingStartedAt' | 'onboardingPlanDays' | 'onboardingPausedReason' | 'onboardingNotes' | 'lastManualSessionAt' | 'status' | 'lastHealthStatus' | 'lastOpenedAt' | 'lastHealthCheckAt' | 'lastSuccessfulLoginAt' | 'lastError' | 'createdAt' | 'updatedAt'> & { proxyProtocol?: ProxyProtocol; createdAt: string; updatedAt: string };
 
 export class AccountRepository {
   constructor(private readonly db: Database.Database) {}

@@ -20,10 +20,12 @@ import { PublishingPage } from "./pages/PublishingPage";
 import { HistoryPage } from "./pages/HistoryPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { AboutPage } from "./pages/AboutPage";
+import { OnboardingPage } from "./pages/OnboardingPage";
 
 type Route =
   | "dashboard"
   | "accounts"
+  | "onboarding"
   | "groups"
   | "drafts"
   | "queue"
@@ -49,6 +51,7 @@ export default function App() {
   const [busy, setBusy] = useState<Record<string, string>>({});
   const [error, setError] = useState<UiError | null>(null);
   const [health, setHealth] = useState<HealthCheckResult | null>(null);
+  const [onboardingAccountId, setOnboardingAccountId] = useState<string>();
   const refresh = async () => {
     try {
       setAccounts(await window.accountApi.list());
@@ -108,7 +111,7 @@ export default function App() {
   const onError = (value: unknown) => setError(asUiError(value));
   const page =
     route === "dashboard" ? (
-      <DashboardPage />
+      <DashboardPage onNavigate={(target) => setRoute(target)} />
     ) : route === "accounts" ? (
       <AccountsPage
         accounts={accounts}
@@ -119,7 +122,10 @@ export default function App() {
         onEdit={(account) => setForm({ mode: "edit", account })}
         onDelete={setDeleteTarget}
         onAdd={() => setForm({ mode: "create" })}
+        onWarmup={(account) => { setOnboardingAccountId(account.id); setRoute("onboarding"); }}
       />
+    ) : route === "onboarding" ? (
+      <OnboardingPage initialAccountId={onboardingAccountId} onError={onError} />
     ) : route === "groups" ? (
       <GroupsPage accounts={accounts} onError={onError} />
     ) : route === "drafts" ? (
@@ -140,6 +146,7 @@ export default function App() {
       <LogsPage accounts={accounts} />
     );
   const navigation: Array<[Route, string, string]> = [
+    ["onboarding", "Account Onboarding", "✓"],
     ["dashboard", "Dashboard", "⌂"],
     ["accounts", "Accounts", "◉"],
     ["groups", "Groups", "◎"],
@@ -247,6 +254,7 @@ function AccountsPage({
   onEdit,
   onDelete,
   onAdd,
+  onWarmup,
 }: {
   accounts: FacebookAccount[];
   loading: boolean;
@@ -260,6 +268,7 @@ function AccountsPage({
   onEdit: (account: FacebookAccount) => void;
   onDelete: (account: FacebookAccount) => void;
   onAdd: () => void;
+  onWarmup: (account: FacebookAccount) => void;
 }) {
   const [operations, setOperations] = useState<AccountOperationsSummary[]>([]);
   const [importOpen, setImportOpen] = useState(false);
@@ -299,6 +308,7 @@ function AccountsPage({
         }
         onEdit={onEdit}
         onDelete={onDelete}
+        onWarmup={onWarmup}
         onOpenFolder={(id) =>
           void onRun(id, "Opening folder…", async () =>
             window.accountApi.openProfileFolder(id),

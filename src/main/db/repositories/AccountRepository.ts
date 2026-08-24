@@ -1,9 +1,10 @@
 import type Database from 'better-sqlite3';
-import type { AccountOperationsSummary, AccountStatus, FacebookAccount, HealthStatus, OperationalHealthStatus, PublishingBlock } from '@shared/types';
+import type { AccountOperationsSummary, AccountStatus, FacebookAccount, HealthStatus, OperationalHealthStatus, ProxyProtocol, ProxyStatus, ProxyTestResult, PublishingBlock } from '@shared/types';
 
 type AccountRow = {
   id: string; name: string; profile_name: string; profile_directory: string; proxy_enabled: number;
-  proxy_host: string | null; proxy_port: number | null; proxy_username: string | null; proxy_password_key: string | null;
+  proxy_protocol: ProxyProtocol; proxy_host: string | null; proxy_port: number | null; proxy_username: string | null; proxy_password_key: string | null;
+  proxy_status: ProxyStatus; last_proxy_test_at: string | null; last_proxy_test_ip: string | null; last_proxy_latency_ms: number | null; last_proxy_error: string | null;
   status: AccountStatus; last_health_status: HealthStatus | null; last_opened_at: string | null;
   last_health_check_at: string | null; last_successful_login_at: string | null; last_error: string | null;
   created_at: string; updated_at: string;
@@ -12,15 +13,16 @@ type AccountRow = {
 function mapAccount(row: AccountRow): FacebookAccount {
   return {
     id: row.id, name: row.name, profileName: row.profile_name, profileDirectory: row.profile_directory,
-    proxyEnabled: Boolean(row.proxy_enabled), proxyHost: row.proxy_host ?? undefined, proxyPort: row.proxy_port ?? undefined,
+    proxyEnabled: Boolean(row.proxy_enabled), proxyProtocol: row.proxy_protocol ?? 'HTTP', proxyHost: row.proxy_host ?? undefined, proxyPort: row.proxy_port ?? undefined,
     proxyUsername: row.proxy_username ?? undefined, proxyPasswordKey: row.proxy_password_key ?? undefined,
+    proxyStatus: row.proxy_status ?? (row.proxy_enabled ? 'UNTESTED' : 'NOT_CONFIGURED'), lastProxyTestAt: row.last_proxy_test_at ?? undefined, lastProxyTestIp: row.last_proxy_test_ip ?? undefined, lastProxyLatencyMs: row.last_proxy_latency_ms ?? undefined, lastProxyError: row.last_proxy_error ?? undefined,
     status: row.status, lastHealthStatus: row.last_health_status ?? undefined, lastOpenedAt: row.last_opened_at ?? undefined,
     lastHealthCheckAt: row.last_health_check_at ?? undefined, lastSuccessfulLoginAt: row.last_successful_login_at ?? undefined,
     lastError: row.last_error ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at
   };
 }
 
-export type AccountInsert = Omit<FacebookAccount, 'status' | 'lastHealthStatus' | 'lastOpenedAt' | 'lastHealthCheckAt' | 'lastSuccessfulLoginAt' | 'lastError' | 'createdAt' | 'updatedAt'> & { createdAt: string; updatedAt: string };
+export type AccountInsert = Omit<FacebookAccount, 'proxyProtocol' | 'proxyStatus' | 'lastProxyTestAt' | 'lastProxyTestIp' | 'lastProxyLatencyMs' | 'lastProxyError' | 'status' | 'lastHealthStatus' | 'lastOpenedAt' | 'lastHealthCheckAt' | 'lastSuccessfulLoginAt' | 'lastError' | 'createdAt' | 'updatedAt'> & { proxyProtocol?: ProxyProtocol; createdAt: string; updatedAt: string };
 
 export class AccountRepository {
   constructor(private readonly db: Database.Database) {}
@@ -41,10 +43,11 @@ export class AccountRepository {
 
   insert(account: AccountInsert): FacebookAccount {
     this.db.prepare(`INSERT INTO accounts
-      (id, name, profile_name, profile_directory, proxy_enabled, proxy_host, proxy_port, proxy_username, proxy_password_key, status, created_at, updated_at)
-      VALUES (@id, @name, @profileName, @profileDirectory, @proxyEnabled, @proxyHost, @proxyPort, @proxyUsername, @proxyPasswordKey, 'STOPPED', @createdAt, @updatedAt)`)
+      (id, name, profile_name, profile_directory, proxy_enabled, proxy_protocol, proxy_host, proxy_port, proxy_username, proxy_password_key, proxy_status, status, created_at, updated_at)
+      VALUES (@id, @name, @profileName, @profileDirectory, @proxyEnabled, @proxyProtocol, @proxyHost, @proxyPort, @proxyUsername, @proxyPasswordKey, @proxyStatus, 'STOPPED', @createdAt, @updatedAt)`)
       .run({
         id: account.id, name: account.name, profileName: account.profileName, profileDirectory: account.profileDirectory,
+        proxyProtocol: account.proxyProtocol ?? 'HTTP', proxyStatus: account.proxyEnabled ? 'UNTESTED' : 'NOT_CONFIGURED',
         proxyEnabled: account.proxyEnabled ? 1 : 0, proxyHost: account.proxyHost ?? null, proxyPort: account.proxyPort ?? null,
         proxyUsername: account.proxyUsername ?? null, proxyPasswordKey: account.proxyPasswordKey ?? null,
         createdAt: account.createdAt, updatedAt: account.updatedAt
@@ -52,14 +55,25 @@ export class AccountRepository {
     return this.get(account.id)!;
   }
 
-  updateProxyAndName(id: string, fields: { name: string; proxyEnabled: boolean; proxyHost?: string; proxyPort?: number; proxyUsername?: string; proxyPasswordKey?: string }): FacebookAccount {
-    this.db.prepare(`UPDATE accounts SET name = @name, proxy_enabled = @proxyEnabled, proxy_host = @proxyHost,
+  updateProxyAndName(id: string, fields: { name: string; proxyEnabled: boolean; proxyProtocol: ProxyProtocol; proxyHost?: string; proxyPort?: number; proxyUsername?: string; proxyPasswordKey?: string; resetProxyStatus: boolean }): FacebookAccount {
+    this.db.prepare(`UPDATE accounts SET name = @name, proxy_enabled = @proxyEnabled, proxy_protocol = @proxyProtocol, proxy_host = @proxyHost,
       proxy_port = @proxyPort, proxy_username = @proxyUsername, proxy_password_key = @proxyPasswordKey,
+      proxy_status = CASE WHEN @proxyEnabled = 0 THEN 'NOT_CONFIGURED' WHEN @resetProxyStatus = 1 THEN 'UNTESTED' ELSE proxy_status END,
+      last_proxy_test_at = CASE WHEN @resetProxyStatus = 1 OR @proxyEnabled = 0 THEN NULL ELSE last_proxy_test_at END,
+      last_proxy_test_ip = CASE WHEN @resetProxyStatus = 1 OR @proxyEnabled = 0 THEN NULL ELSE last_proxy_test_ip END,
+      last_proxy_latency_ms = CASE WHEN @resetProxyStatus = 1 OR @proxyEnabled = 0 THEN NULL ELSE last_proxy_latency_ms END,
+      last_proxy_error = CASE WHEN @resetProxyStatus = 1 OR @proxyEnabled = 0 THEN NULL ELSE last_proxy_error END,
       updated_at = @updatedAt WHERE id = @id`)
-      .run({ id, name: fields.name, proxyEnabled: fields.proxyEnabled ? 1 : 0, proxyHost: fields.proxyHost ?? null,
+      .run({ id, name: fields.name, proxyEnabled: fields.proxyEnabled ? 1 : 0, proxyProtocol: fields.proxyProtocol, resetProxyStatus: fields.resetProxyStatus ? 1 : 0, proxyHost: fields.proxyHost ?? null,
         proxyPort: fields.proxyPort ?? null, proxyUsername: fields.proxyUsername ?? null, proxyPasswordKey: fields.proxyPasswordKey ?? null,
         updatedAt: new Date().toISOString() });
     return this.get(id)!;
+  }
+
+  setProxyTest(id: string, result: ProxyTestResult): FacebookAccount {
+    const updated = this.db.prepare(`UPDATE accounts SET proxy_status = ?, last_proxy_test_at = ?, last_proxy_test_ip = ?, last_proxy_latency_ms = ?, last_proxy_error = ?, updated_at = ? WHERE id = ? AND proxy_enabled = 1`)
+      .run(result.success ? 'WORKING' : 'FAILED', result.testedAt, result.ip ?? null, result.latencyMs ?? null, result.success ? null : result.message ?? 'Proxy test failed.', result.testedAt, id);
+    if (!updated.changes) throw new Error('Proxy-enabled account not found.'); return this.get(id)!;
   }
 
   setStatus(id: string, status: AccountStatus, lastError?: string): void {
@@ -97,8 +111,8 @@ export class AccountRepository {
       (SELECT COUNT(*) FROM queue_items q WHERE q.account_id = a.id AND q.status = 'NEEDS_ATTENTION') AS needs_attention
       FROM accounts a LEFT JOIN account_publish_blocks b ON b.account_id = a.id ORDER BY a.created_at`).all(now) as Row[];
     return rows.map((row) => {
-      const facebookSession: OperationalHealthStatus = row.block_reason ? 'BLOCKED' : row.last_health_status === 'READY' ? 'READY' : row.last_health_status === 'LOGIN_REQUIRED' ? 'LOGIN_REQUIRED' : row.last_health_status === 'CHECKPOINT' ? 'CHECKPOINT' : row.last_error?.toLowerCase().includes('proxy') ? 'PROXY_ERROR' : row.status === 'ERROR' || row.last_health_status === 'ERROR' ? 'BROWSER_ERROR' : 'UNKNOWN';
-      return { accountId: row.id, accountName: row.name, browser: row.status, facebookSession, publishingBlock: row.block_reason ? { accountId: row.id, accountName: row.name, reason: row.block_reason, message: row.block_message!, blockedAt: row.blocked_at! } : undefined, proxyConfigured: Boolean(row.proxy_enabled), lastSuccessfulPublish: row.last_success ?? undefined, lastFailure: row.last_failure ?? undefined, pendingQueue: row.pending_queue, dueQueue: row.due_queue, needsAttention: row.needs_attention };
+      const facebookSession: OperationalHealthStatus = row.block_reason ? 'BLOCKED' : row.last_health_status === 'READY' ? 'READY' : row.last_health_status === 'LOGIN_REQUIRED' ? 'LOGIN_REQUIRED' : row.last_health_status === 'CHECKPOINT' ? 'CHECKPOINT' : row.last_health_status === 'ERROR' ? 'BROWSER_ERROR' : 'UNKNOWN';
+      return { accountId: row.id, accountName: row.name, browser: row.status, facebookSession, publishingBlock: row.block_reason ? { accountId: row.id, accountName: row.name, reason: row.block_reason, message: row.block_message!, blockedAt: row.blocked_at! } : undefined, proxyConfigured: Boolean(row.proxy_enabled), proxyProtocol: row.proxy_enabled ? row.proxy_protocol : undefined, proxyStatus: row.proxy_status, lastProxyTestAt: row.last_proxy_test_at ?? undefined, lastProxyTestIp: row.last_proxy_test_ip ?? undefined, lastProxyLatencyMs: row.last_proxy_latency_ms ?? undefined, lastProxyError: row.last_proxy_error ?? undefined, lastSuccessfulPublish: row.last_success ?? undefined, lastFailure: row.last_failure ?? undefined, pendingQueue: row.pending_queue, dueQueue: row.due_queue, needsAttention: row.needs_attention };
     });
   }
 

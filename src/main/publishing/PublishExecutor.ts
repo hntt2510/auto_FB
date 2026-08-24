@@ -54,6 +54,9 @@ export class PublishExecutor {
       if (finalized) return 'COMPLETED';
       const publishing = error instanceof PublishingError ? error : new PublishingError('BROWSER_CLOSED', 'Publishing stopped unexpectedly.', this.irreversible(attempt.id));
       const message = sanitizeMessage(publishing.message); const security = publishing.code === 'ACCOUNT_LOGIN_REQUIRED' || publishing.code === 'ACCOUNT_CHECKPOINT'; const ambiguous = publishing.afterSubmit || this.irreversible(attempt.id) || security || publishing.code === 'GROUP_UNAVAILABLE' || publishing.code === 'MEDIA_FILE_MISSING';
+      if (item.accountId && publishing.code === 'NETWORK_ERROR' && this.accounts.get(item.accountId)?.proxyEnabled) {
+        try { this.accounts.setProxyTest(item.accountId, { success: false, errorCode: 'PROXY_CONNECTION_FAILED', message: 'Network operation through the fixed proxy failed.', testedAt: new Date().toISOString() }); } catch { /* queue failure remains authoritative */ }
+      }
       if (item.accountId && security) { const health = publishing.code === 'ACCOUNT_LOGIN_REQUIRED' ? 'LOGIN_REQUIRED' : 'CHECKPOINT'; this.accounts.setHealth(item.accountId, health, new Date().toISOString(), message); this.attempts.blockAccount(item.accountId, item.accountName, health, message); this.auditSafe(item.accountId, 'ACCOUNT_PUBLISHING_PAUSED', message, item.id); }
       if (ambiguous) { const receipt = publishing.afterSubmit || this.irreversible(attempt.id) ? { result: 'UNKNOWN' as const, groupUrl: item.groupUrl, evidence: message } : undefined; this.attempts.finalizeNeedsAttention(item.id, token, attempt.id, message, receipt); finalized = true; this.auditSafe(item.accountId, 'PUBLISH_NEEDS_ATTENTION', message, item.id); }
       else { this.attempts.finalizeFailure(item.id, token, attempt.id, publishing.code, message); finalized = true; this.auditSafe(item.accountId, 'PUBLISH_FAILED', message, item.id); }

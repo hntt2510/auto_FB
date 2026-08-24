@@ -10,6 +10,8 @@ export const ACCOUNT_STATUSES = [
 
 export type AccountStatus = (typeof ACCOUNT_STATUSES)[number];
 export type HealthStatus = 'READY' | 'LOGIN_REQUIRED' | 'CHECKPOINT' | 'ERROR';
+export type ProxyProtocol = 'HTTP' | 'HTTPS' | 'SOCKS5';
+export type ProxyStatus = 'NOT_CONFIGURED' | 'UNTESTED' | 'WORKING' | 'FAILED';
 
 export type FacebookAccount = {
   id: string;
@@ -17,10 +19,17 @@ export type FacebookAccount = {
   profileName: string;
   profileDirectory: string;
   proxyEnabled: boolean;
+  proxyProtocol: ProxyProtocol;
   proxyHost?: string;
   proxyPort?: number;
   proxyUsername?: string;
   proxyPasswordKey?: string;
+  proxyPasswordSaved?: boolean;
+  proxyStatus: ProxyStatus;
+  lastProxyTestAt?: string;
+  lastProxyTestIp?: string;
+  lastProxyLatencyMs?: number;
+  lastProxyError?: string;
   status: AccountStatus;
   lastHealthStatus?: HealthStatus;
   lastOpenedAt?: string;
@@ -57,6 +66,11 @@ export type ApiErrorCode =
   | 'SECRET_UNAVAILABLE'
   | 'SECRET_DECRYPT_FAILED'
   | 'PROXY_AUTH_FAILED'
+  | 'PROXY_CONNECTION_FAILED'
+  | 'PROXY_TIMEOUT'
+  | 'PROXY_DNS_FAILED'
+  | 'PROXY_UNSUPPORTED'
+  | 'PROXY_TEST_FAILED'
   | 'BROWSER_LAUNCH_FAILED'
   | 'BROWSER_NAVIGATION_FAILED'
   | 'DATABASE_ERROR'
@@ -127,6 +141,7 @@ export type CreateAccountInput = {
   name: string;
   profileName: string;
   proxyEnabled: boolean;
+  proxyProtocol?: ProxyProtocol;
   proxyHost?: string;
   proxyPort?: number;
   proxyUsername?: string;
@@ -137,12 +152,20 @@ export type UpdateAccountInput = {
   accountId: string;
   name: string;
   proxyEnabled: boolean;
+  proxyProtocol?: ProxyProtocol;
   proxyHost?: string;
   proxyPort?: number;
   proxyUsername?: string;
   proxyPassword?: string;
   clearProxyPassword?: boolean;
 };
+
+export type ProxyConfigurationInput = { proxyProtocol: ProxyProtocol; proxyHost: string; proxyPort: number; proxyUsername?: string; proxyPassword?: string };
+export type ProxyTestInput = ProxyConfigurationInput & { accountId?: string };
+export type ProxyTestResult = { success: boolean; latencyMs?: number; ip?: string; errorCode?: Extract<ApiErrorCode, 'PROXY_CONNECTION_FAILED' | 'PROXY_AUTH_FAILED' | 'PROXY_TIMEOUT' | 'PROXY_DNS_FAILED' | 'PROXY_UNSUPPORTED' | 'PROXY_TEST_FAILED'>; message?: string; testedAt: string };
+export type ParsedProxyInput = ProxyConfigurationInput;
+export type ProxyImportRow = { line: number; display: string; status: 'VALID' | 'INVALID'; proxy?: Omit<ParsedProxyInput, 'proxyPassword'> & { hasPassword: boolean }; reason?: string };
+export type ProxyImportPreview = { valid: number; invalid: number; rows: ProxyImportRow[] };
 
 export type DeleteAccountInput = {
   accountId: string;
@@ -159,6 +182,8 @@ export type AccountApi = {
   delete: (input: DeleteAccountInput) => Promise<void>;
   openProfileFolder: (accountId: string) => Promise<void>;
   operations: () => Promise<AccountOperationsSummary[]>;
+  testProxy: (input: ProxyTestInput) => Promise<ProxyTestResult>;
+  previewProxyImport: (text: string) => Promise<ProxyImportPreview>;
   onChanged: (listener: (accounts: FacebookAccount[]) => void) => () => void;
 };
 
@@ -325,7 +350,7 @@ export type PublishingReadiness = 'NOT_READY' | 'PREFLIGHT_READY' | 'LIVE_ENABLE
 export type LiveReadinessReason = 'ENGINE_DISABLED' | 'NOT_LIVE_MODE' | 'ACCOUNT_BLOCKED' | 'ACCOUNT_LOGIN_REQUIRED' | 'ACCOUNT_CHECKPOINT' | 'GROUP_INACTIVE' | 'ASSIGNMENT_MISSING' | 'PREFLIGHT_MISSING' | 'PREFLIGHT_EXPIRED' | 'PREFLIGHT_SELECTOR_VERSION_MISMATCH' | 'PREFLIGHT_SNAPSHOT_MISMATCH' | 'MEDIA_INVALID';
 export type LiveReadiness = { ready: true; preflightId: string } | { ready: false; reasons: LiveReadinessReason[] };
 export type SchedulerRuntimeState = 'DISARMED' | 'ARMED' | 'STOPPING';
-export type SchedulerStopReason = 'OPERATOR_DISARMED' | 'STOP_AFTER_CURRENT' | 'SESSION_JOB_LIMIT_REACHED' | 'APPLICATION_SHUTDOWN';
+export type SchedulerStopReason = 'OPERATOR_DISARMED' | 'STOP_AFTER_CURRENT' | 'STOP_DRAIN_TIMEOUT' | 'STOP_DRAIN_FAILED' | 'SESSION_JOB_LIMIT_REACHED' | 'APPLICATION_SHUTDOWN';
 export type SchedulerArmPreview = { dueJobs: number; overdueJobs: number; oldestOverdueAt?: string; accountsInvolved: number; groupsInvolved: number; executionMode: ExecutionMode; canaryMode: boolean; sessionLimit: number };
 export type PublishingEngineStatus = { settings: PublishingSettings; schedulerRunning: boolean; schedulerArmed: boolean; schedulerState: SchedulerRuntimeState; schedulerReason?: SchedulerStopReason; sessionCompleted: number; sessionLimit: number; armPreview: SchedulerArmPreview; tickRunning: boolean; running: QueueItem[]; blockedAccounts: PublishingBlock[]; recentAttempts: PublishAttemptSummary[]; dueCount: number; overdueCount: number; selectorVersion: string; readiness: PublishingReadiness; recentProbes: SelectorProbeResult[] };
 export type RequeueInput = { queueId: string; scheduledAt?: string };
@@ -360,7 +385,7 @@ export type PublishingSettingsUpdate = PublishingSettings & { confirmLive?: bool
 export type PublishingSettingsApi = { getPublishing: () => Promise<PublishingSettings>; updatePublishing: (input: PublishingSettingsUpdate) => Promise<PublishingSettings> };
 
 export type OperationalHealthStatus = 'READY' | 'LOGIN_REQUIRED' | 'CHECKPOINT' | 'PROXY_ERROR' | 'BROWSER_ERROR' | 'BLOCKED' | 'UNKNOWN';
-export type AccountOperationsSummary = { accountId: string; accountName: string; browser: string; facebookSession: OperationalHealthStatus; publishingBlock?: PublishingBlock; proxyConfigured: boolean; lastSuccessfulPublish?: string; lastFailure?: string; pendingQueue: number; dueQueue: number; needsAttention: number };
+export type AccountOperationsSummary = { accountId: string; accountName: string; browser: string; facebookSession: OperationalHealthStatus; publishingBlock?: PublishingBlock; proxyConfigured: boolean; proxyProtocol?: ProxyProtocol; proxyStatus: ProxyStatus; lastProxyTestAt?: string; lastProxyTestIp?: string; lastProxyLatencyMs?: number; lastProxyError?: string; lastSuccessfulPublish?: string; lastFailure?: string; pendingQueue: number; dueQueue: number; needsAttention: number };
 export type GroupOperationsSummary = { groupId: string; groupName: string; status: 'ACTIVE' | 'ARCHIVED' | 'NEEDS_ATTENTION'; lastOpened?: string; lastSuccessfulPublish?: string; lastFailedPublish?: string; lastAccountUsed?: string; activeQueueCount: number };
 export type AssignmentMatrix = { accounts: Array<{ id: string; name: string }>; groups: Array<{ id: string; name: string }>; assignments: Array<{ accountId: string; groupId: string }> };
 export type PublishHistoryFilter = { from?: string; to?: string; accountId?: string; groupId?: string; outcome?: string; verificationSource?: 'AUTOMATED' | 'OPERATOR' | 'NONE'; search?: string };

@@ -19,6 +19,7 @@ import { PublishRepository } from "@main/db/repositories/PublishRepository";
 import { QueueRepository } from "@main/db/repositories/QueueRepository";
 import { OperationsService } from "./OperationsService";
 import type { PublishScheduler } from "@main/publishing/PublishScheduler";
+import { LATEST_SCHEMA_VERSION } from "@main/db/migrations";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -189,7 +190,7 @@ describe("Production Operations V2 persistence", () => {
       expect(listed).toHaveLength(5);
       expect(
         validateManagedBackup(value.paths.backups, listed[0].id).schemaVersion,
-      ).toBe(4);
+      ).toBe(LATEST_SCHEMA_VERSION);
       expect(() =>
         resolveManagedBackup(value.paths.backups, "..\\app.db"),
       ).toThrow();

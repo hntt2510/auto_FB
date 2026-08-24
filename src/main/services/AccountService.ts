@@ -1,27 +1,32 @@
 import { randomUUID } from 'node:crypto';
 import { shell } from 'electron';
-import { accountIdSchema, createAccountSchema, deleteAccountSchema, updateAccountSchema } from '@shared/schemas';
-import type { AccountOperationsSummary, CreateAccountInput, DeleteAccountInput, FacebookAccount, HealthCheckResult, LogFilter, UpdateAccountInput, AuditLog } from '@shared/types';
+import { accountIdSchema, createAccountSchema, deleteAccountSchema, proxyImportSchema, proxyTestSchema, updateAccountSchema } from '@shared/schemas';
+import type { AccountOperationsSummary, CreateAccountInput, DeleteAccountInput, FacebookAccount, HealthCheckResult, LogFilter, ProxyImportPreview, ProxyTestInput, ProxyTestResult, UpdateAccountInput, AuditLog } from '@shared/types';
 import { AccountRepository } from '@main/db/repositories/AccountRepository';
 import { AuditLogRepository } from '@main/db/repositories/AuditLogRepository';
 import { SecretStore, SecretStoreError } from '@main/security/SecretStore';
 import { BrowserManager } from '@main/browser/BrowserManager';
 import { ProfileManager, ProfilePathError } from '@main/browser/ProfileManager';
 import { AppError } from '@main/errors';
+import { ProxyTestService } from '@main/proxy/ProxyTestService';
+import { previewProxyImport } from '@shared/proxy';
 
 export class AccountService {
   readonly browser: BrowserManager;
   private healthObserver?: (result: HealthCheckResult) => void;
+  private readonly proxyTester: ProxyTestService;
 
   constructor(
     private readonly accounts: AccountRepository,
     private readonly audit: AuditLogRepository,
     private readonly profiles: ProfileManager,
     private readonly secrets: SecretStore,
-    private readonly onChanged: () => void
+    private readonly onChanged: () => void,
+    proxyTester?: ProxyTestService
   ) {
     this.accounts.normalizeRuntimeStatuses();
     this.browser = new BrowserManager(accounts, profiles, secrets, audit, onChanged);
+    this.proxyTester = proxyTester ?? new ProxyTestService();
   }
 
   list(): FacebookAccount[] { return this.accounts.list().map(publicAccount); }
@@ -41,7 +46,7 @@ export class AccountService {
       if (data.proxyEnabled && data.proxyPassword) passwordKey = this.secrets.set(data.proxyPassword);
       const timestamp = new Date().toISOString();
       account = this.accounts.insert({ id: randomUUID(), name: data.name, profileName: data.profileName, profileDirectory,
-        proxyEnabled: data.proxyEnabled, proxyHost: data.proxyEnabled ? data.proxyHost : undefined, proxyPort: data.proxyEnabled ? data.proxyPort : undefined,
+        proxyEnabled: data.proxyEnabled, proxyProtocol: data.proxyEnabled ? data.proxyProtocol : 'HTTP', proxyHost: data.proxyEnabled ? data.proxyHost : undefined, proxyPort: data.proxyEnabled ? data.proxyPort : undefined,
         proxyUsername: data.proxyEnabled ? data.proxyUsername : undefined, proxyPasswordKey: passwordKey, createdAt: timestamp, updatedAt: timestamp });
     } catch (error) {
       this.secrets.delete(passwordKey);
@@ -61,7 +66,7 @@ export class AccountService {
     if (!parsed.success) throw new AppError('INVALID_REQUEST', parsed.error.issues[0]?.message ?? 'Invalid account data.');
     const data = parsed.data;
     const current = this.require(data.accountId);
-    if (this.browser.isRunning(data.accountId)) throw new AppError('ACCOUNT_RUNNING', 'Close the account before editing it.');
+    if (this.browser.isRunning(data.accountId)) throw new AppError('ACCOUNT_RUNNING', 'Close this account browser before changing proxy settings.');
     const oldKey = current.proxyPasswordKey;
     let key = oldKey;
     let newKey: string | undefined;
@@ -84,7 +89,8 @@ export class AccountService {
         if (!data.proxyUsername && key) { key = undefined; oldKeyToDelete = oldKey; }
         if (data.proxyUsername && !key) throw new AppError('INVALID_REQUEST', 'Proxy password is required for an authenticated proxy.');
       }
-      const account = this.accounts.updateProxyAndName(data.accountId, { name: data.name, proxyEnabled: data.proxyEnabled,
+      const resetProxyStatus = current.proxyEnabled !== data.proxyEnabled || current.proxyProtocol !== data.proxyProtocol || current.proxyHost !== data.proxyHost || current.proxyPort !== data.proxyPort || current.proxyUsername !== data.proxyUsername || Boolean(data.proxyPassword) || Boolean(data.clearProxyPassword);
+      const account = this.accounts.updateProxyAndName(data.accountId, { name: data.name, proxyEnabled: data.proxyEnabled, proxyProtocol: data.proxyEnabled ? data.proxyProtocol : 'HTTP', resetProxyStatus,
         proxyHost: data.proxyEnabled ? data.proxyHost : undefined, proxyPort: data.proxyEnabled ? data.proxyPort : undefined,
         proxyUsername: data.proxyEnabled ? data.proxyUsername : undefined, proxyPasswordKey: key });
       dbUpdated = true;
@@ -132,6 +138,25 @@ export class AccountService {
   async healthCheck(accountId: string): Promise<HealthCheckResult> { const result = await this.browser.healthCheck(this.validId(accountId)); this.healthObserver?.(result); return result; }
   setHealthObserver(observer: (result: HealthCheckResult) => void): void { this.healthObserver = observer; }
 
+  previewProxyImport(text: string): ProxyImportPreview { const parsed = proxyImportSchema.safeParse({ text }); if (!parsed.success) throw new AppError('INVALID_REQUEST', 'Proxy import text is too large or invalid.'); return previewProxyImport(parsed.data.text); }
+
+  async testProxy(input: ProxyTestInput): Promise<ProxyTestResult> {
+    const parsed = proxyTestSchema.safeParse(input); if (!parsed.success) throw new AppError('INVALID_REQUEST', parsed.error.issues[0]?.message ?? 'Invalid proxy test configuration.'); const data = parsed.data;
+    let password = data.proxyPassword; let account: FacebookAccount | undefined;
+    if (data.accountId) {
+      account = this.require(data.accountId);
+      if (!password && data.proxyUsername) {
+        if (!account.proxyPasswordKey || account.proxyUsername !== data.proxyUsername) throw new AppError('INVALID_REQUEST', 'A password is required for these proxy credentials.');
+        try { password = this.secrets.get(account.proxyPasswordKey); } catch (error) { if (error instanceof SecretStoreError) throw new AppError(error.code, error.message); throw error; }
+      }
+    }
+    const result = await this.proxyTester.test({ proxyProtocol: data.proxyProtocol, proxyHost: data.proxyHost, proxyPort: data.proxyPort, proxyUsername: data.proxyUsername }, password);
+    const matchesSaved = Boolean(account?.proxyEnabled && !data.proxyPassword && account.proxyProtocol === data.proxyProtocol && account.proxyHost === data.proxyHost && account.proxyPort === data.proxyPort && account.proxyUsername === data.proxyUsername);
+    if (account && matchesSaved) { this.accounts.setProxyTest(account.id, result); this.notifyChanged(); }
+    try { this.audit.add({ accountId: account?.id, eventType: result.success ? 'PROXY_TEST_SUCCEEDED' : 'PROXY_TEST_FAILED', message: result.success ? 'Proxy connectivity test succeeded.' : 'Proxy connectivity test failed.', metadata: JSON.stringify({ protocol: data.proxyProtocol, host: data.proxyHost, port: data.proxyPort, latencyMs: result.latencyMs, ip: result.ip, errorCode: result.errorCode }) }); } catch { /* best effort */ }
+    return result;
+  }
+
   async openProfileFolder(accountId: string): Promise<void> {
     const account = this.require(this.validId(accountId));
     this.profiles.assertControlledDirectory(account.profileDirectory);
@@ -157,5 +182,5 @@ export class AccountService {
 }
 
 function publicAccount(account: FacebookAccount): FacebookAccount {
-  return { ...account, proxyPasswordKey: undefined };
+  return { ...account, proxyPasswordKey: undefined, proxyPasswordSaved: Boolean(account.proxyPasswordKey) };
 }

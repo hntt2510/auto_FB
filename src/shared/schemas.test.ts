@@ -5,6 +5,15 @@ describe('account schemas', () => {
   it('accepts direct and authenticated fixed proxy accounts', () => {
     expect(createAccountSchema.safeParse({ name: 'FB01', profileName: 'fb01', proxyEnabled: false }).success).toBe(true);
     expect(createAccountSchema.safeParse({ name: 'FB02', profileName: 'fb02', proxyEnabled: true, proxyHost: '127.0.0.1', proxyPort: 8080, proxyUsername: 'user', proxyPassword: 'secret' }).success).toBe(true);
+    expect(createAccountSchema.safeParse({ name: 'FB03', profileName: 'fb03', proxyEnabled: true, proxyProtocol: 'SOCKS5', proxyHost: 'proxy.example.com', proxyPort: 1080 }).success).toBe(true);
+  });
+
+  it('rejects proxy control characters and unsupported protocols while preserving opaque usernames', () => {
+    expect(createAccountSchema.safeParse({ name: 'FB', profileName: 'fb', proxyEnabled: true, proxyProtocol: 'FTP', proxyHost: 'host', proxyPort: 80 }).success).toBe(false);
+    expect(createAccountSchema.safeParse({ name: 'FB', profileName: 'fb', proxyEnabled: true, proxyHost: 'host\r\nInjected', proxyPort: 80 }).success).toBe(false);
+    const parsed = createAccountSchema.parse({ name: 'FB', profileName: 'fb', proxyEnabled: true, proxyHost: 'host', proxyPort: 80, proxyUsername: '  provider-zone-us-session-123  ', proxyPassword: 'secret' });
+    if (!parsed.proxyEnabled) throw new Error('Expected proxy account.');
+    expect(parsed.proxyUsername).toBe('provider-zone-us-session-123');
   });
 
   it('rejects invalid ports, missing proxy host, and incomplete credentials', () => {

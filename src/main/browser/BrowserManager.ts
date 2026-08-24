@@ -8,6 +8,8 @@ import { SecretStore, SecretStoreError } from '@main/security/SecretStore';
 import { SessionHealthService } from './SessionHealthService';
 import type { AccountStatus, FacebookAccount, HealthCheckResult } from '@shared/types';
 import { normalizeFacebookGroupUrl } from '@shared/groupUrl';
+import { buildPlaywrightProxy } from '@main/proxy/ProxyConfiguration';
+import { classifyProxyError } from '@main/proxy/ProxyTestService';
 
 process.env.PLAYWRIGHT_BROWSERS_PATH ??= '0';
 
@@ -90,8 +92,9 @@ export class BrowserManager {
   private async navigateAccountPageInternal(accountId: string, url: string): Promise<{ accountId: string; status: 'OPENED' | 'LOGIN_REQUIRED' | 'CHECKPOINT' | 'ERROR'; reason?: string }> {
     if (this.shuttingDown) throw new AppError('BROWSER_LAUNCH_FAILED', 'Browser manager is shutting down.');
     const normalized = normalizeFacebookGroupUrl(url).normalizedUrl;
+    const account = this.requireAccount(accountId);
     let entry = this.contexts.get(accountId);
-    if (!entry) { await this.launch(this.requireAccount(accountId), false); entry = this.contexts.get(accountId); }
+    if (!entry) { await this.launch(account, false); entry = this.contexts.get(accountId); }
     if (!entry) throw new AppError('BROWSER_LAUNCH_FAILED', 'Unable to open the account browser.');
     const page = await entry.context.newPage();
     try {
@@ -104,6 +107,10 @@ export class BrowserManager {
       if (classification.status === 'ERROR') { const checkedAt = new Date().toISOString(); this.accounts.setHealth(accountId, 'ERROR', checkedAt, classification.reason); return { accountId, status: 'ERROR', reason: classification.reason }; }
       return { accountId, status: 'OPENED' };
     } catch (error) {
+      if (account.proxyEnabled && this.isProxyError(error)) {
+        const proxyError = this.proxyLaunchError(error); this.accounts.setProxyTest(accountId, { success: false, errorCode: proxyError.code as 'PROXY_AUTH_FAILED' | 'PROXY_CONNECTION_FAILED' | 'PROXY_TIMEOUT' | 'PROXY_DNS_FAILED' | 'PROXY_UNSUPPORTED', message: proxyError.message, testedAt: new Date().toISOString() });
+        return { accountId, status: 'ERROR', reason: proxyError.message };
+      }
       const reason = sanitizeMessage(error instanceof Error ? error.message : 'Facebook group could not be reached.');
       this.accounts.setHealth(accountId, 'ERROR', new Date().toISOString(), reason);
       return { accountId, status: 'ERROR', reason };
@@ -127,6 +134,11 @@ export class BrowserManager {
       try {
         await page.goto('https://www.facebook.com/', { waitUntil: 'domcontentloaded', timeout: 45000 });
       } catch (error) {
+        if (account.proxyEnabled && this.isProxyError(error)) {
+          const proxyError = this.proxyLaunchError(error); result = { accountId, status: 'ERROR', checkedAt: new Date().toISOString(), reason: proxyError.message };
+          this.accounts.setProxyTest(accountId, { success: false, errorCode: proxyError.code as 'PROXY_AUTH_FAILED' | 'PROXY_CONNECTION_FAILED' | 'PROXY_TIMEOUT' | 'PROXY_DNS_FAILED' | 'PROXY_UNSUPPORTED', message: proxyError.message, testedAt: result.checkedAt });
+          this.auditSafely({ accountId, eventType: 'PROXY_HEALTH_FAILED', message: proxyError.message }); return result;
+        }
         const reason = sanitizeMessage(error instanceof Error ? error.message : 'Facebook could not be reached.');
         result = { accountId, status: 'ERROR', checkedAt: new Date().toISOString(), reason: `Facebook could not be reached: ${reason}` };
         this.accounts.setHealth(accountId, result.status, result.checkedAt, result.reason);
@@ -176,16 +188,10 @@ export class BrowserManager {
       this.profiles.assertControlledDirectory(account.profileDirectory);
       const options: LaunchOptions = { headless: false, viewport: null };
       if (account.proxyEnabled) {
-        if (!account.proxyHost || !account.proxyPort) throw new AppError('INVALID_REQUEST', 'Proxy host and port are required.');
-        options.proxy = { server: `http://${account.proxyHost}:${account.proxyPort}` };
-        if (account.proxyUsername) {
-          options.proxy.username = account.proxyUsername;
-          if (!account.proxyPasswordKey) throw new AppError('PROXY_AUTH_FAILED', 'Proxy credentials are incomplete.');
-          try { options.proxy.password = this.secrets.get(account.proxyPasswordKey); }
-          catch (error) {
-            if (error instanceof SecretStoreError) throw new AppError(error.code, error.message);
-            throw error;
-          }
+        try { options.proxy = buildPlaywrightProxy(account, this.secrets); }
+        catch (error) {
+          if (error instanceof SecretStoreError) throw new AppError(error.code, error.message);
+          throw error;
         }
       }
       const context = await this.launchPersistentContext(account.profileDirectory, options);
@@ -207,8 +213,11 @@ export class BrowserManager {
       } else {
         this.locks.release(account.id);
       }
-      const appError = error instanceof AppError ? error : new AppError(this.isProxyError(error) ? 'PROXY_AUTH_FAILED' : 'BROWSER_LAUNCH_FAILED', this.isProxyError(error) ? 'Proxy connection or authentication failed.' : `Unable to launch ${account.name}.`);
+      const appError = error instanceof AppError ? error : account.proxyEnabled && this.isProxyError(error) ? this.proxyLaunchError(error) : new AppError('BROWSER_LAUNCH_FAILED', `Unable to launch ${account.name}.`);
       try { this.accounts.setStatus(account.id, 'ERROR', appError.message); } catch { /* preserve process if persistence is unavailable */ }
+      if (account.proxyEnabled && appError.code.startsWith('PROXY_')) {
+        try { this.accounts.setProxyTest(account.id, { success: false, errorCode: appError.code as 'PROXY_AUTH_FAILED' | 'PROXY_CONNECTION_FAILED' | 'PROXY_TIMEOUT' | 'PROXY_DNS_FAILED' | 'PROXY_UNSUPPORTED' | 'PROXY_TEST_FAILED', message: appError.message, testedAt: new Date().toISOString() }); } catch { /* preserve the launch error */ }
+      }
       this.auditSafely({ accountId: account.id, eventType: 'BROWSER_ERROR', message: appError.message });
       this.notifySafely();
       throw appError;
@@ -266,6 +275,19 @@ export class BrowserManager {
   }
 
   private isProxyError(error: unknown): boolean {
-    return /proxy|ERR_TUNNEL_CONNECTION_FAILED|ERR_PROXY_CONNECTION_FAILED|407/i.test(error instanceof Error ? error.message : String(error));
+    return /proxy|ERR_TUNNEL_CONNECTION_FAILED|ERR_PROXY_CONNECTION_FAILED|ERR_SOCKS_CONNECTION_FAILED|ERR_INVALID_AUTH_CREDENTIALS|ERR_NO_SUPPORTED_PROXIES|407/i.test(error instanceof Error ? error.message : String(error));
+  }
+
+  private proxyLaunchError(error: unknown): AppError {
+    const code = classifyProxyError(error);
+    const message = ({
+      PROXY_AUTH_FAILED: 'Proxy authentication failed.',
+      PROXY_CONNECTION_FAILED: 'Proxy connection failed.',
+      PROXY_TIMEOUT: 'Proxy connection timed out.',
+      PROXY_DNS_FAILED: 'Proxy DNS resolution failed.',
+      PROXY_UNSUPPORTED: 'Proxy protocol is unsupported.',
+      PROXY_TEST_FAILED: 'Proxy connection failed.'
+    } as const)[code];
+    return new AppError(code === 'PROXY_TEST_FAILED' ? 'PROXY_CONNECTION_FAILED' : code, message);
   }
 }

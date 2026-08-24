@@ -83,6 +83,10 @@ describe("PublishScheduler operational state machine", () => {
     expect(scheduler.runtimeState()).toBe("DISARMED");
     expect(scheduler.reason()).toBe("STOP_AFTER_CURRENT");
   });
+  it("recovers STOPPING into a deliberate failed-drain state", () => {
+    const { scheduler } = harness(); scheduler.arm(); scheduler.beginStopping(); scheduler.failStopping("STOP_DRAIN_TIMEOUT");
+    expect(scheduler.runtimeState()).toBe("DISARMED"); expect(scheduler.reason()).toBe("STOP_DRAIN_TIMEOUT");
+  });
   it("disarms when persisted settings become unsafe", () => { const { scheduler, current } = harness(); scheduler.start(); scheduler.arm(); current.canaryMode = true; scheduler.reconfigure(); expect(scheduler.runtimeState()).toBe("DISARMED"); expect(scheduler.reason()).toBe("OPERATOR_DISARMED"); });
   it("does not overlap scheduler ticks while execution is pending", async () => {
     vi.useFakeTimers();

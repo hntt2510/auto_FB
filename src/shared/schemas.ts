@@ -17,10 +17,11 @@ export const accountNameSchema = z.string().trim().min(1, 'Account name is requi
 export const accountIdSchema = z.string().uuid('Invalid account id');
 
 const proxyFields = {
-  proxyHost: z.string().trim().min(1, 'Proxy host is required').max(255),
+  proxyProtocol: z.enum(['HTTP', 'HTTPS', 'SOCKS5']).default('HTTP'),
+  proxyHost: z.string().max(255).refine((value) => !/[\r\n\0]/.test(value), 'Proxy host contains forbidden characters').transform((value) => value.trim()).refine((value) => Boolean(value), 'Proxy host is required'),
   proxyPort: z.number().int().min(1).max(65535),
-  proxyUsername: z.string().trim().min(1).max(255).optional(),
-  proxyPassword: z.string().min(1).max(4096).optional()
+  proxyUsername: z.string().max(1024).refine((value) => !/[\r\n\0]/.test(value), 'Proxy username contains forbidden characters').transform((value) => value.trim()).refine((value) => Boolean(value), 'Proxy username is required').optional(),
+  proxyPassword: z.string().min(1).max(4096).refine((value) => !/[\r\n\0]/.test(value), 'Proxy password contains forbidden characters').optional()
 };
 
 function validateCredentials(data: { proxyUsername?: string; proxyPassword?: string }, ctx: z.RefinementCtx) {
@@ -38,10 +39,11 @@ export const updateAccountSchema = z.object({
   accountId: accountIdSchema,
   name: accountNameSchema,
   proxyEnabled: z.boolean(),
-  proxyHost: z.string().trim().min(1).max(255).optional(),
+  proxyProtocol: z.enum(['HTTP', 'HTTPS', 'SOCKS5']).default('HTTP'),
+  proxyHost: proxyFields.proxyHost.optional(),
   proxyPort: z.number().int().min(1).max(65535).optional(),
-  proxyUsername: z.string().trim().min(1).max(255).optional(),
-  proxyPassword: z.string().min(1).max(4096).optional(),
+  proxyUsername: proxyFields.proxyUsername,
+  proxyPassword: proxyFields.proxyPassword,
   clearProxyPassword: z.boolean().optional()
 }).superRefine((data, ctx) => {
   if (!data.proxyEnabled && (data.proxyHost || data.proxyPort || data.proxyUsername || data.proxyPassword || data.clearProxyPassword)) {
@@ -93,6 +95,8 @@ export const publishMarkVerifiedSchema = z.object({ queueId: queueIdSchema, evid
 export const publishingSettingsSchema = z.object({ enabled: z.boolean(), executionMode: z.enum(['DRY_RUN', 'LIVE']), schedulerIntervalSeconds: z.number().int().min(15).max(300), maxConcurrentAccounts: z.number().int().min(1).max(3), videoUploadTimeoutSeconds: z.number().int().min(60).max(1800), maxJobsPerSchedulerSession: z.number().int().min(1).max(100).default(20), canaryMode: z.boolean().default(true) });
 export const publishingSettingsUpdateSchema = publishingSettingsSchema.extend({ confirmLive: z.boolean().optional() });
 export const schedulerArmSchema = z.object({ acknowledgeOverdue: z.boolean().optional() }).default({});
+export const proxyTestSchema = z.object({ accountId: accountIdSchema.optional(), ...proxyFields }).superRefine((data, ctx) => { if (!data.accountId) validateCredentials(data, ctx); if (data.proxyPassword && !data.proxyUsername) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['proxyUsername'], message: 'Proxy username is required with a password' }); });
+export const proxyImportSchema = z.object({ text: z.string().max(256_000) });
 export const queueBatchActionSchema = z.object({ queueIds: z.array(queueIdSchema).min(1).max(500).transform((ids) => [...new Set(ids)]), action: z.enum(['PAUSE', 'RESUME', 'CANCEL']) });
 export const queueBatchRescheduleSchema = z.object({ queueIds: z.array(queueIdSchema).min(1).max(500).transform((ids) => [...new Set(ids)]), mode: z.enum(['SET_TIME', 'SHIFT', 'CLEAR']), scheduledAt: z.string().datetime().refine((value) => value.endsWith('Z'), 'Schedule must be UTC.').optional(), shiftMinutes: z.number().int().min(-525600).max(525600).optional() }).superRefine((value, ctx) => {
   if (value.mode === 'SET_TIME' && !value.scheduledAt) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['scheduledAt'], message: 'A UTC schedule is required.' });

@@ -4,6 +4,8 @@ import electronPath from "electron";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { createServer } from "node:http";
+import { Buffer } from "node:buffer";
 
 const packagedExecutable = process.argv[2]
   ? resolve(process.argv[2])
@@ -11,6 +13,11 @@ const packagedExecutable = process.argv[2]
 const userData = mkdtempSync(join(tmpdir(), "fb-account-manager-runtime-qa-"));
 const errors = [];
 let activeApplication;
+let proxyServer;
+let proxyPort;
+const proxyFixtureEvents = [];
+const proxyUsername = "qa-provider-user";
+const proxyPassword = "qa-fixture-password";
 const assert = (condition, message) => {
   if (!condition) throw new Error(message);
 };
@@ -20,7 +27,7 @@ async function launch() {
     executablePath: packagedExecutable ?? electronPath,
     args: packagedExecutable ? [] : ["."],
     cwd: process.cwd(),
-    env: { ...process.env, FB_ACCOUNT_MANAGER_USER_DATA: userData },
+    env: { ...process.env, FB_ACCOUNT_MANAGER_USER_DATA: userData, FB_PROXY_TEST_ENDPOINTS: `http://proxy-test.invalid/ip` },
   });
   activeApplication = application;
   const page = await application.firstWindow();
@@ -33,6 +40,23 @@ async function launch() {
     .getByRole("heading", { name: "Facebook Account Manager" })
     .waitFor();
   return { application, page };
+}
+
+async function startProxyFixture() {
+  const expected = `Basic ${Buffer.from(`${proxyUsername}:${proxyPassword}`).toString("base64")}`;
+  proxyServer = createServer((request, response) => {
+    proxyFixtureEvents.push(`${request.method} ${request.url}`);
+    if (request.headers["proxy-authorization"] !== expected) { response.writeHead(407, { "Proxy-Authenticate": 'Basic realm="runtime-qa"' }); response.end("Proxy authentication required"); return; }
+    response.writeHead(200, { "Content-Type": "application/json" }); response.end('{"ip":"203.0.113.77"}');
+  });
+  proxyServer.on("connect", (request, socket) => {
+    proxyFixtureEvents.push(`CONNECT ${request.url}`);
+    if (request.headers["proxy-authorization"] !== expected) { socket.end('HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm="runtime-qa"\r\n\r\n'); return; }
+    socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+    socket.once("data", () => { const body = '{"ip":"203.0.113.77"}'; socket.end(`HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(body)}\r\nConnection: close\r\n\r\n${body}`); });
+  });
+  await new Promise((resolveListen, rejectListen) => { proxyServer.once("error", rejectListen); proxyServer.listen(0, "0.0.0.0", resolveListen); });
+  proxyPort = proxyServer.address().port;
 }
 
 async function open(page, label) {
@@ -52,6 +76,7 @@ async function open(page, label) {
 }
 
 try {
+  await startProxyFixture();
   const first = await launch();
   const { page } = first;
   for (const label of [
@@ -114,6 +139,43 @@ try {
       canaryMode: true,
     }),
   );
+  await open(page, "Accounts");
+  await page.getByRole("button", { name: "Import proxies" }).click();
+  await page.locator("textarea.import-text").fill(`127.0.0.1:${proxyPort}\ninvalid proxy`);
+  await page.getByRole("button", { name: "Preview" }).click();
+  await page.getByText("Valid").first().waitFor();
+  assert((await page.getByText("Invalid proxy input", { exact: true }).count()) === 1, "Proxy import preview did not report the invalid row.");
+  await page.getByRole("button", { name: "Close" }).click();
+  await page.getByRole("button", { name: /Add account/ }).click();
+  await page.getByLabel("Account name").fill("QA Proxy Account");
+  await page.getByLabel("Profile name").fill(`qa-proxy-${Date.now().toString(36)}`);
+  await page.getByLabel("Fixed proxy").check();
+  await page.getByLabel("Paste proxy").fill(`http://${proxyUsername}:${proxyPassword}@127.0.0.1:${proxyPort}`);
+  await page.getByRole("button", { name: "Paste proxy" }).click();
+  assert(await page.getByLabel("Host").inputValue() === "127.0.0.1", "Pasted proxy host was not populated.");
+  assert(await page.getByLabel("Protocol").inputValue() === "HTTP", "Pasted proxy protocol was not populated.");
+  await page.getByRole("button", { name: "Test proxy" }).click();
+  await page.locator(".proxy-test-result, .inline-error").waitFor();
+  assert((await page.locator(".form-modal").innerText()).includes("Proxy connected"), `Proxy success fixture failed (${proxyFixtureEvents.join(" | ")}): ${await page.locator(".form-modal").innerText()}`);
+  await page.getByText("IP: 203.0.113.77", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Create account" }).click();
+  const proxyRow = page.locator(".table-card").getByRole("row").filter({ hasText: "QA Proxy Account" });
+  await proxyRow.getByRole("button", { name: "Edit" }).click();
+  await page.getByLabel("Password").fill("wrong-password");
+  await page.getByRole("button", { name: /^(Re)?Test proxy$/i }).click();
+  await page.locator(".proxy-test-result, .inline-error").waitFor();
+  assert((await page.locator(".form-modal").innerText()).includes("Proxy authentication failed."), `Proxy auth fixture failed: ${await page.locator(".form-modal").innerText()}`);
+  await page.getByLabel("Password").fill("");
+  await page.getByLabel("Host").fill("127.0.0.2");
+  await page.getByRole("button", { name: "Save changes" }).click();
+  await proxyRow.getByRole("button", { name: "Edit" }).click();
+  await page.getByText("Password: Saved", { exact: true }).waitFor();
+  await page.getByRole("button", { name: /^(Re)?Test proxy$/i }).click();
+  await page.locator(".proxy-test-result, .inline-error").waitFor();
+  assert((await page.locator(".form-modal").innerText()).includes("Proxy connected"), `Saved proxy retest failed: ${await page.locator(".form-modal").innerText()}`);
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await proxyRow.getByText("WORKING", { exact: true }).waitFor();
+  await proxyRow.getByText("IP 203.0.113.77", { exact: true }).waitFor();
   const seeded = await page.evaluate(async () => {
     const suffix = Date.now().toString(36);
     const account = await window.accountApi.create({
@@ -182,7 +244,7 @@ try {
     groupOps: await window.groupApi.operations(),
   }));
   assert(
-    maintenance.backup.schemaVersion === 4,
+    maintenance.backup.schemaVersion === 5,
     "Backup schema validation failed.",
   );
   assert(
@@ -195,7 +257,7 @@ try {
   );
   assert(maintenance.about.appVersion === "0.7.0", "About version mismatch.");
   assert(
-    maintenance.accountOps[0].pendingQueue === 2,
+    maintenance.accountOps.find((item) => item.accountId === seeded.accountId)?.pendingQueue === 2,
     "Account queue linkage mismatch.",
   );
   assert(
@@ -209,6 +271,7 @@ try {
     queue: await window.queueApi.list({}),
     status: await window.publishApi.status(),
     settings: await window.settingsApi.getPublishing(),
+    accounts: await window.accountApi.list(),
   }));
   assert(persisted.queue.length === 2, "Queue did not persist across restart.");
   assert(
@@ -219,6 +282,10 @@ try {
     persisted.settings.maxJobsPerSchedulerSession === 3,
     "Scheduler session cap setting did not persist.",
   );
+  const persistedProxy = persisted.accounts.find((account) => account.name === "QA Proxy Account");
+  assert(persistedProxy?.proxyPasswordSaved === true && !persistedProxy.proxyPasswordKey, "Encrypted proxy credential did not persist safely.");
+  const restartProxyTest = await second.page.evaluate((account) => window.accountApi.testProxy({ accountId: account.id, proxyProtocol: account.proxyProtocol, proxyHost: account.proxyHost, proxyPort: account.proxyPort, proxyUsername: account.proxyUsername }), persistedProxy);
+  assert(restartProxyTest.success && restartProxyTest.ip === "203.0.113.77", "Saved proxy credential could not be retested after restart.");
   await second.application.close();
   activeApplication = undefined;
   assert(errors.length === 0, `Renderer errors: ${errors.join(" | ")}`);
@@ -239,6 +306,8 @@ try {
         "backup",
         "storage",
         "sanitized exports",
+        "fixed proxy parser/test/status",
+        "encrypted proxy credential restart",
         "restart persistence",
       ],
     }),
@@ -248,6 +317,7 @@ try {
   process.exitCode = 1;
 } finally {
   try { await activeApplication?.close(); } catch { /* best effort */ }
+  if (proxyServer) await new Promise((resolveClose) => proxyServer.close(resolveClose));
   await new Promise((resolveDelay) => setTimeout(resolveDelay, 250));
   try { rmSync(userData, { recursive: true, force: true }); } catch { /* Windows may release Chromium files shortly after exit */ }
 }

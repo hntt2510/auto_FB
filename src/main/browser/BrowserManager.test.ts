@@ -27,19 +27,20 @@ function makeContext() {
   return { context, page, triggerClose: () => { if (!closed) { closed = true; closeHandler?.(); } } };
 }
 
-function fixture(launcher: PersistentContextLauncher) {
-  let account: FacebookAccount = { id: accountId, name: 'FB01', profileName: 'fb01', profileDirectory: 'C:/profiles/fb01', proxyEnabled: false, status: 'STOPPED', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' };
+function fixture(launcher: PersistentContextLauncher, overrides: Partial<FacebookAccount> = {}, secretGet = vi.fn()) {
+  let account: FacebookAccount = { id: accountId, name: 'FB01', profileName: 'fb01', profileDirectory: 'C:/profiles/fb01', proxyEnabled: false, proxyProtocol: 'HTTP', proxyStatus: 'NOT_CONFIGURED', status: 'STOPPED', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', ...overrides };
   const accounts = {
     get: vi.fn(() => account),
     setStatus: vi.fn((_id: string, status: FacebookAccount['status']) => { account = { ...account, status }; }),
     setOpened: vi.fn((_id: string, openedAt: string) => { account = { ...account, status: 'RUNNING', lastOpenedAt: openedAt }; }),
     setHealth: vi.fn(),
+    setProxyTest: vi.fn(),
     list: vi.fn(() => [account])
   };
   const audit = { add: vi.fn() };
   const profiles = { assertControlledDirectory: vi.fn() };
-  const manager = new BrowserManager(accounts as unknown as AccountRepository, profiles as unknown as ProfileManager, {} as SecretStore, audit as unknown as AuditLogRepository, vi.fn(), launcher);
-  return { manager, accounts, audit, profiles };
+  const manager = new BrowserManager(accounts as unknown as AccountRepository, profiles as unknown as ProfileManager, { get: secretGet } as unknown as SecretStore, audit as unknown as AuditLogRepository, vi.fn(), launcher);
+  return { manager, accounts, audit, profiles, secretGet };
 }
 
 describe('BrowserManager lifecycle serialization', () => {
@@ -117,5 +118,29 @@ describe('BrowserManager lifecycle serialization', () => {
     const operation = manager.withAccountPage(accountId, async (page) => { started.resolve(); await gate.promise; expect(page.isClosed()).toBe(false); });
     await started.promise; expect(operationPage.close).not.toHaveBeenCalled(); expect(manager.isRunning(accountId)).toBe(true);
     gate.resolve(); await operation; expect(operationPage.close).toHaveBeenCalledTimes(1); await manager.closeAccount(accountId);
+  });
+
+  it.each([['HTTP', 'http://proxy.example.com:8080'], ['HTTPS', 'https://proxy.example.com:8080'], ['SOCKS5', 'socks5://proxy.example.com:8080']] as const)('launches %s through the centralized fixed proxy options', async (proxyProtocol, server) => {
+    const runtime = makeContext(); const launcher = vi.fn(async () => runtime.context as never); const secretGet = vi.fn(() => 'SECRET_PASSWORD');
+    const { manager } = fixture(launcher as unknown as PersistentContextLauncher, { proxyEnabled: true, proxyProtocol, proxyStatus: 'UNTESTED', proxyHost: 'proxy.example.com', proxyPort: 8080, proxyUsername: 'opaque-user', proxyPasswordKey: 'secret-key' }, secretGet);
+    await manager.openAccount(accountId);
+    expect(launcher).toHaveBeenCalledWith('C:/profiles/fb01', expect.objectContaining({ proxy: { server, username: 'opaque-user', password: 'SECRET_PASSWORD' } }));
+    expect(secretGet).toHaveBeenCalledWith('secret-key'); await manager.closeAccount(accountId);
+  });
+
+  it('persists a sanitized proxy failure without changing Facebook health', async () => {
+    const secret = 'SECRET_PASSWORD'; const launcher = vi.fn(async () => { throw new Error(`ERR_PROXY_CONNECTION_FAILED http://username:${secret}@proxy.example.com:8080`); });
+    const { manager, accounts, audit } = fixture(launcher as unknown as PersistentContextLauncher, { proxyEnabled: true, proxyProtocol: 'HTTP', proxyStatus: 'UNTESTED', proxyHost: 'proxy.example.com', proxyPort: 8080, proxyUsername: 'username', proxyPasswordKey: 'secret-key' }, vi.fn(() => secret));
+    await expect(manager.openAccount(accountId)).rejects.toMatchObject({ code: 'PROXY_CONNECTION_FAILED', message: 'Proxy connection failed.' });
+    expect(accounts.setProxyTest).toHaveBeenCalledWith(accountId, expect.objectContaining({ success: false, errorCode: 'PROXY_CONNECTION_FAILED', message: 'Proxy connection failed.' }));
+    expect(accounts.setHealth).not.toHaveBeenCalled(); expect(JSON.stringify(audit.add.mock.calls)).not.toContain(secret);
+  });
+
+  it('keeps Facebook session health separate when a running proxy fails', async () => {
+    const runtime = makeContext(); const { manager, accounts } = fixture(async () => runtime.context as never, { proxyEnabled: true, proxyProtocol: 'HTTP', proxyStatus: 'WORKING', proxyHost: 'proxy.example.com', proxyPort: 8080 });
+    await manager.openAccount(accountId); runtime.page.goto.mockRejectedValueOnce(new Error('net::ERR_PROXY_CONNECTION_FAILED'));
+    await expect(manager.healthCheck(accountId)).resolves.toMatchObject({ status: 'ERROR', reason: 'Proxy connection failed.' });
+    expect(accounts.setProxyTest).toHaveBeenCalledWith(accountId, expect.objectContaining({ success: false, errorCode: 'PROXY_CONNECTION_FAILED' })); expect(accounts.setHealth).not.toHaveBeenCalled();
+    await manager.closeAccount(accountId);
   });
 });

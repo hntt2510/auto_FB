@@ -37,6 +37,7 @@ import { OperationsReportService } from './publishing/OperationsReportService';
 import { broadcastPublishingChanged } from './ipc/publishing.ipc';
 import { OperationsService } from './services/OperationsService';
 import { LATEST_SCHEMA_VERSION } from './db/migrations';
+import { ProxyTestService } from './proxy/ProxyTestService';
 
 let service: AccountService | undefined;
 let cleanupIpc: (() => void) | undefined;
@@ -74,7 +75,7 @@ if (!gotLock) {
       isEncryptionAvailable: () => safeStorage.isEncryptionAvailable(),
       encryptString: (value) => safeStorage.encryptString(value),
       decryptString: (value) => safeStorage.decryptString(value)
-    }), () => { if (service) broadcastAccounts(service); });
+    }), () => { if (service) broadcastAccounts(service); }, new ProxyTestService(proxyTestEndpoints()));
     cleanupIpc = registerIpc(service, () => new Set(BrowserWindow.getAllWindows().map((current) => current.webContents.id)));
     registerMediaProtocol(drafts, media);
     const workspaceNotify = () => { broadcastPublishingChanged(); };
@@ -155,3 +156,11 @@ function sanitizeRuntimeMessage(message: string): string {
 }
 
 function dependencyVersion(name: string): string { try { const value = JSON.parse(readFileSync(join(app.getAppPath(), 'package.json'), 'utf8')) as { dependencies?: Record<string, string> }; return value.dependencies?.[name]?.replace(/^[^0-9]*/, '') ?? 'unknown'; } catch { return 'unknown'; } }
+
+function proxyTestEndpoints(): string[] | undefined {
+  const configured = process.env.FB_PROXY_TEST_ENDPOINTS;
+  if (!configured) return undefined;
+  const endpoints = configured.split(',').map((value) => value.trim()).filter(Boolean).slice(0, 2);
+  if (!endpoints.length || endpoints.some((value) => { try { return !['http:', 'https:'].includes(new URL(value).protocol); } catch { return true; } })) return undefined;
+  return endpoints;
+}

@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 
-export const LATEST_SCHEMA_VERSION = 4;
+export const LATEST_SCHEMA_VERSION = 5;
 
 export function runMigrations(db: Database.Database): void {
   db.exec(`
@@ -295,6 +295,16 @@ export function runMigrations(db: Database.Database): void {
         created_at TEXT NOT NULL
       );
       CREATE INDEX idx_publish_preflights_queue ON publish_preflights(queue_item_id, checked_at DESC);
+    `],
+    [5, `
+      ALTER TABLE accounts ADD COLUMN proxy_protocol TEXT NOT NULL DEFAULT 'HTTP' CHECK (proxy_protocol IN ('HTTP', 'HTTPS', 'SOCKS5'));
+      ALTER TABLE accounts ADD COLUMN proxy_status TEXT NOT NULL DEFAULT 'NOT_CONFIGURED' CHECK (proxy_status IN ('NOT_CONFIGURED', 'UNTESTED', 'WORKING', 'FAILED'));
+      ALTER TABLE accounts ADD COLUMN last_proxy_test_at TEXT;
+      ALTER TABLE accounts ADD COLUMN last_proxy_test_ip TEXT;
+      ALTER TABLE accounts ADD COLUMN last_proxy_latency_ms INTEGER CHECK (last_proxy_latency_ms IS NULL OR last_proxy_latency_ms >= 0);
+      ALTER TABLE accounts ADD COLUMN last_proxy_error TEXT;
+      UPDATE accounts SET proxy_status = CASE WHEN proxy_enabled = 1 THEN 'UNTESTED' ELSE 'NOT_CONFIGURED' END;
+      CREATE INDEX idx_accounts_proxy_status ON accounts(proxy_status, last_proxy_test_at DESC);
     `]
   ];
 

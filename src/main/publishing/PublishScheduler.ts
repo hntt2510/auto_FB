@@ -41,6 +41,7 @@ export class PublishScheduler {
   disarm(reason: SchedulerStopReason = 'OPERATOR_DISARMED'): void { this.transitionDisarmed(reason); }
   beginStopping(): void { if (this.state !== 'ARMED') throw new Error('Only an armed scheduler can stop after current work.'); this.state = 'STOPPING'; this.clearTimer(); this.onChangedSafe(); }
   completeStopping(): void { if (this.state !== 'STOPPING') throw new Error('Scheduler is not stopping.'); this.transitionDisarmed('STOP_AFTER_CURRENT'); }
+  failStopping(reason: Extract<SchedulerStopReason, 'STOP_DRAIN_TIMEOUT' | 'STOP_DRAIN_FAILED'>): void { if (this.state !== 'STOPPING') throw new Error('Scheduler is not stopping.'); this.transitionDisarmed(reason); }
 
   async runDue(): Promise<PublishingRunResult> {
     const settings = this.settings.get(); const limit = Math.max(0, (settings.maxJobsPerSchedulerSession ?? 20) - this.sessionCompleted); const allDue = this.queue.due(new Date().toISOString());

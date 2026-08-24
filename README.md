@@ -52,6 +52,14 @@ Each account owns one filesystem-safe directory under `profiles/`. A profile dir
 
 To add an account, click **Add account**, provide an account name and unique profile name, then choose Direct or Fixed proxy. Login is performed manually in the visible browser window. Closing and reopening the account reuses the same persistent profile.
 
+### Proxy Manager V1
+
+Each account can use exactly one explicitly configured fixed proxy. Supported protocols are **HTTP**, **HTTPS**, and **SOCKS5**. The account form accepts separate protocol/host/port/credential fields and deterministic paste formats such as `host:port`, `host:port:username:password`, `username:password@host:port`, and protocol-prefixed URLs. Imported multiline proxy lists are preview-only and are never automatically assigned or rotated.
+
+**Test proxy** uses an isolated, short-lived Playwright request context with no Facebook profile, cookies, or credentials. It reports the outbound IP, latency, and a local `WORKING`/`FAILED` status. A test does not save the proxy or its credentials. Proxy passwords are encrypted through Electron `safeStorage`; SQLite, account DTOs, audit logs, diagnostics, CSV, JSON reports, and console output never contain plaintext proxy passwords.
+
+A running account must be closed before its network configuration can change. Reopening applies the fixed proxy to that account's persistent context, and every Facebook operation continues through that same context. A proxy failure never triggers automatic fallback to Direct or another proxy. Changing network location may cause Facebook to request login or security verification; it does not bypass checkpoints, CAPTCHA, or any platform security control.
+
 ## Health checks and safety
 
 Health checks classify the current Facebook page conservatively as `READY`, `LOGIN_REQUIRED`, `CHECKPOINT`, or `ERROR`. A stopped account uses a temporary visible persistent context for the check and then closes it. A checkpoint, CAPTCHA, identity confirmation, recovery, suspicious-login, or locked-account signal stops further checking and displays **Manual user action required**.
@@ -92,7 +100,7 @@ Selector probes record the account, group, selector version, field-level `FOUND`
 ## Troubleshooting
 
 - **Account already running:** close the existing browser window or restart the application if a browser crashed before its close event was delivered.
-- **Proxy connection or authentication failed:** verify host, port, and credentials. Passwords are never printed to logs.
+- **Proxy connection or authentication failed:** verify protocol, host, port, and credentials, then use **Retest proxy**. Passwords are never printed to logs, and the app never switches automatically to Direct or another proxy.
 - **Chromium launch failed:** check that the profile is not open in another browser process and that the installed build includes its Playwright browser resources.
 - **Checkpoint or CAPTCHA:** complete the required action manually in the browser; the app will not attempt to bypass it.
 - **Profile deletion:** deleting a database record preserves the profile directory. The stronger delete option removes only the validated directory inside the application profiles root.

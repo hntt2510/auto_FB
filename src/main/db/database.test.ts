@@ -32,12 +32,28 @@ describe('workspace persistence', () => {
   }));
 
   it('creates workspace tables with foreign keys and survives reopen', () => withDatabase((db) => {
-    expect(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all()).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }]);
+    expect(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all()).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }]);
     expect(db.pragma('foreign_keys')).toEqual([{ foreign_keys: 1 }]);
     for (const table of ['groups', 'group_tags', 'account_groups', 'drafts', 'media_assets', 'draft_media', 'queue_items', 'queue_item_media', 'publish_attempts', 'publish_attempt_events', 'publish_receipts', 'account_publish_blocks', 'publish_reconciliations', 'selector_probes', 'publish_preflights']) {
       expect(db.prepare('SELECT name FROM sqlite_master WHERE type = \'table\' AND name = ?').get(table)).toEqual({ name: table });
     }
   }));
+
+  it('persists migration 5 proxy protocol and diagnostic defaults across reopen', () => {
+    const root = mkdtempSync(join(tmpdir(), 'fb-proxy-v2-')); const paths = createAppPaths(root); const now = new Date().toISOString();
+    try {
+      let db = openDatabase(paths); let accounts = new AccountRepository(db);
+      const directId = randomUUID(); const proxyId = randomUUID();
+      accounts.insert({ id: directId, name: 'Direct', profileName: 'direct', profileDirectory: join(root, 'direct'), proxyEnabled: false, createdAt: now, updatedAt: now });
+      accounts.insert({ id: proxyId, name: 'SOCKS', profileName: 'socks', profileDirectory: join(root, 'socks'), proxyEnabled: true, proxyProtocol: 'SOCKS5', proxyHost: 'proxy.example.com', proxyPort: 1080, createdAt: now, updatedAt: now });
+      db.close(); db = openDatabase(paths); accounts = new AccountRepository(db);
+      expect(accounts.get(directId)).toMatchObject({ proxyProtocol: 'HTTP', proxyStatus: 'NOT_CONFIGURED' });
+      expect(accounts.get(proxyId)).toMatchObject({ proxyProtocol: 'SOCKS5', proxyStatus: 'UNTESTED' });
+      accounts.setProxyTest(proxyId, { success: true, ip: '203.0.113.9', latencyMs: 42, testedAt: now });
+      expect(accounts.get(proxyId)).toMatchObject({ proxyStatus: 'WORKING', lastProxyTestIp: '203.0.113.9', lastProxyLatencyMs: 42 });
+      db.close();
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
 
   it('claims a queue item exactly once and recovers stale execution', () => withDatabase((db) => {
     const accounts = new AccountRepository(db); const groups = new GroupRepository(db); const drafts = new DraftRepository(db); const queue = new QueueRepository(db); const publishing = new PublishRepository(db); const now = new Date().toISOString();

@@ -46,7 +46,25 @@ export class PublishingService {
   armScheduler(acknowledgeOverdue = false): PublishingEngineStatus { try { this.scheduler.arm(acknowledgeOverdue); } catch (error) { const message = error instanceof Error ? error.message : 'Scheduler could not be armed.'; const lower = message.toLowerCase(); throw new AppError(lower.includes('canary') ? 'CANARY_LIMIT' : lower.includes('overdue') ? 'OVERDUE_BACKLOG_ACK_REQUIRED' : 'SCHEDULER_INVALID_STATE', message); } this.coordinator.resumeAccepting(); this.auditSafe(undefined, 'PUBLISH_SCHEDULER_ARMED', 'Scheduler armed for this application session.'); this.notifySafe(); return this.status(); }
   disarmScheduler(): PublishingEngineStatus { this.scheduler.disarm(); this.auditSafe(undefined, 'PUBLISH_SCHEDULER_DISARMED', 'Scheduler disarmed.'); this.notifySafe(); return this.status(); }
   async stopPublishing(): Promise<PublishingEngineStatus> { this.scheduler.disarm(); await this.coordinator.stopAndDrain(20000); this.auditSafe(undefined, 'PUBLISHING_STOPPED', 'Publishing stopped and scheduler disarmed.'); this.notifySafe(); return this.status(); }
-  async stopAfterCurrent(): Promise<PublishingEngineStatus> { try { this.scheduler.beginStopping(); } catch (error) { throw new AppError('SCHEDULER_INVALID_STATE', error instanceof Error ? error.message : 'Scheduler is not armed.'); } const drained = await this.coordinator.stopAfterCurrent(20_000); if (!drained) throw new AppError('PUBLISHING_STOPPED', 'Current publishing operations did not drain before the safety timeout.'); this.scheduler.completeStopping(); this.auditSafe(undefined, 'PUBLISH_SCHEDULER_STOP_AFTER_CURRENT', 'Scheduler stopped after current operations completed.'); this.notifySafe(); return this.status(); }
+  async stopAfterCurrent(): Promise<PublishingEngineStatus> {
+    try { this.scheduler.beginStopping(); } catch (error) { throw new AppError('SCHEDULER_INVALID_STATE', error instanceof Error ? error.message : 'Scheduler is not armed.'); }
+    try {
+      const drained = await this.coordinator.stopAfterCurrent(20_000);
+      if (!drained) {
+        this.scheduler.failStopping('STOP_DRAIN_TIMEOUT');
+        throw new AppError('PUBLISHING_STOPPED', 'Current publishing operations did not drain before the safety timeout.');
+      }
+      this.scheduler.completeStopping();
+      this.auditSafe(undefined, 'PUBLISH_SCHEDULER_STOP_AFTER_CURRENT', 'Scheduler stopped after current operations completed.');
+      this.notifySafe();
+      return this.status();
+    } catch (error) {
+      if (this.scheduler.runtimeState() === 'STOPPING') this.scheduler.failStopping('STOP_DRAIN_FAILED');
+      throw error instanceof AppError ? error : new AppError('PUBLISHING_STOPPED', 'Publishing drain failed while stopping after current work.');
+    } finally {
+      this.coordinator.resumeAccepting();
+    }
+  }
   async exportReport(): Promise<string | undefined> { if (!this.report) throw new AppError('INVALID_STATE', 'Operations report is unavailable.'); return this.report.chooseAndExport(); }
 
   private async runMany(ids: string[]): Promise<PublishingRunResult> { const unique = [...new Set(ids)]; if (this.settings.get().executionMode === 'DRY_RUN') { for (const id of unique) await this.preflight(id); return { requested: unique.length, claimed: 0, completed: 0, skipped: unique.length }; } return this.coordinator.run(unique, this.settings.get()); }

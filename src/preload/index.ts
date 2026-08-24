@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AboutInfo, AccountApi, AccountOperationsSummary, AssignmentAccount, AssignmentMatrix, AuditLog, BackupInfo, CreateAccountInput, DashboardApi, DashboardSummary, DeleteAccountInput, Draft, DraftApi, DraftFilter, DraftInput, DraftMedia, DraftStatus, FacebookAccount, FacebookGroup, GroupApi, GroupFilter, GroupImportPreview, GroupImportResult, GroupInput, GroupOpenResult, GroupOperationsSummary, HealthCheckResult, LiveReadiness, LogApi, LogFilter, MediaReorderInput, OperationsApi, OrphanMediaScan, PlannerSummary, PreflightResult, PublishApi, PublishAttempt, PublishHistoryFilter, PublishingEngineStatus, PublishingHistoryRow, PublishingRunResult, PublishingSettings, PublishingSettingsApi, PublishingSettingsUpdate, QueueApi, QueueBatchActionInput, QueueBatchInput, QueueBatchRescheduleInput, QueueFilter, QueueItem, QueueOptions, QueuePreview, ReconciliationRecord, RequeueInput, SelectorProbeResult, StorageUsage, UpdateAccountInput } from '@shared/types';
+import type { AboutInfo, AccountApi, AccountOperationsSummary, AssignmentAccount, AssignmentMatrix, AuditLog, BackupInfo, CreateAccountInput, DashboardApi, DashboardSummary, DeleteAccountInput, Draft, DraftApi, DraftFilter, DraftInput, DraftMedia, DraftStatus, FacebookAccount, FacebookGroup, GroupApi, GroupFilter, GroupImportPreview, GroupImportResult, GroupInput, GroupOpenResult, GroupOperationsSummary, HealthCheckResult, LiveReadiness, LogApi, LogFilter, MediaReorderInput, OperationsApi, OrphanMediaScan, PlannerSummary, PreflightResult, ProxyImportPreview, ProxyTestInput, ProxyTestResult, PublishApi, PublishAttempt, PublishHistoryFilter, PublishingEngineStatus, PublishingHistoryRow, PublishingRunResult, PublishingSettings, PublishingSettingsApi, PublishingSettingsUpdate, QueueApi, QueueBatchActionInput, QueueBatchInput, QueueBatchRescheduleInput, QueueFilter, QueueItem, QueueOptions, QueuePreview, ReconciliationRecord, RequeueInput, SelectorProbeResult, StorageUsage, UpdateAccountInput } from '@shared/types';
 
 type IpcResponse<T> = { ok: true; data: T } | { ok: false; error: { code: string; message: string } };
 
@@ -20,6 +20,8 @@ const accountApi: AccountApi = {
   open: (accountId: string) => invoke<FacebookAccount>('accounts:open', accountId),
   close: (accountId: string) => invoke<FacebookAccount>('accounts:close', accountId),
   healthCheck: (accountId: string) => invoke<HealthCheckResult>('accounts:health', accountId),
+  testProxy: (input: ProxyTestInput) => invoke<ProxyTestResult>('accounts:test-proxy', input),
+  previewProxyImport: (text: string) => invoke<ProxyImportPreview>('accounts:proxy-import-preview', { text }),
   delete: (input: DeleteAccountInput) => invoke<void>('accounts:delete', input),
   openProfileFolder: (accountId: string) => invoke<void>('accounts:open-profile', accountId),
   operations: () => invoke<AccountOperationsSummary[]>('accounts:operations'),

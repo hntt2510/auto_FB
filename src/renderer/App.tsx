@@ -4,6 +4,7 @@ import type {
   CreateAccountInput,
   FacebookAccount,
   HealthCheckResult,
+  ProxyImportPreview,
   UpdateAccountInput,
 } from "@shared/types";
 import { AccountForm } from "./components/AccountForm";
@@ -261,6 +262,11 @@ function AccountsPage({
   onAdd: () => void;
 }) {
   const [operations, setOperations] = useState<AccountOperationsSummary[]>([]);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importText, setImportText] = useState("");
+  const [importPreview, setImportPreview] = useState<ProxyImportPreview>();
+  const [importError, setImportError] = useState("");
+  const [importing, setImporting] = useState(false);
   useEffect(() => {
     void window.accountApi.operations().then(setOperations);
   }, [accounts]);
@@ -271,9 +277,10 @@ function AccountsPage({
           <h2>Accounts</h2>
           <p>One Facebook account per isolated persistent browser profile.</p>
         </div>
-        <button className="primary" onClick={onAdd}>
-          ＋ Add account
-        </button>
+        <div className="actions">
+          <button className="secondary" onClick={() => setImportOpen(true)}>Import proxies</button>
+          <button className="primary" onClick={onAdd}>＋ Add account</button>
+        </div>
       </div>
       <AccountTable
         accounts={accounts}
@@ -346,7 +353,7 @@ function AccountsPage({
                         "—"
                       )}
                     </td>
-                    <td>{item.proxyConfigured ? "Configured" : "Direct"}</td>
+                    <td>{item.proxyConfigured ? <><span className={`status-badge status-${item.proxyStatus.toLowerCase()}`}>{item.proxyStatus}</span><small>{item.proxyProtocol}{item.lastProxyTestIp ? ` · IP ${item.lastProxyTestIp}` : ""}</small>{item.lastProxyLatencyMs !== undefined && <small>{item.lastProxyLatencyMs} ms</small>}{item.lastProxyError && <small className="error-text" title={item.lastProxyError}>{item.lastProxyError}</small>}</> : <span className="status-badge">DIRECT</span>}</td>
                     <td>
                       <small>
                         {item.lastSuccessfulPublish
@@ -383,6 +390,7 @@ function AccountsPage({
           </p>
         </div>
       </div>
+      {importOpen && <div className="modal-backdrop"><div className="modal form-modal import-modal"><div className="modal-header"><div><div className="eyebrow">CONFIGURATION PREVIEW</div><h2>Import proxies</h2></div><button className="close-button" onClick={() => setImportOpen(false)}>×</button></div><p>Paste one proxy per line. Valid rows are previewed only and are never assigned automatically.</p>{importError && <div className="inline-error">{importError}</div>}<textarea className="import-text" value={importText} onChange={(event) => { setImportText(event.target.value); setImportPreview(undefined); }} placeholder={'proxy.example.com:8080\nsocks5://user:password@proxy.example.com:1080'} />{importPreview && <div className="import-summary"><div className="status-summary"><span>Valid <strong>{importPreview.valid}</strong></span><span>Invalid <strong>{importPreview.invalid}</strong></span></div>{importPreview.rows.map((row) => <div className={`import-row ${row.status.toLowerCase()}`} key={row.line}><span>Line {row.line}</span><span>{row.display}</span><span>{row.reason ?? (row.proxy?.hasPassword ? 'Credentials present (hidden)' : 'No credentials')}</span></div>)}</div>}<div className="modal-actions"><button className="secondary" onClick={() => setImportOpen(false)}>Close</button><button className="primary" disabled={!importText.trim() || importing} onClick={() => { setImporting(true); setImportError(""); void window.accountApi.previewProxyImport(importText).then(setImportPreview).catch((error: unknown) => setImportError(error instanceof Error ? error.message : "Unable to preview proxies.")).finally(() => setImporting(false)); }}>{importing ? "Checking…" : "Preview"}</button></div></div></div>}
     </main>
   );
 }

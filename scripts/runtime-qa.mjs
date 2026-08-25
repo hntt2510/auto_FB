@@ -241,15 +241,24 @@ try {
     throw new Error(`Account session wait failed: ${error instanceof Error ? error.message : String(error)}\nAccount: ${JSON.stringify(state.account)}\nUI: ${state.body}`);
   }
   assert((await page.locator("body").innerText()).includes("ACTIVE"), `Account session did not start: ${await page.locator("body").innerText()}`);
-  await page.getByRole("button", { name: "Open Notifications", exact: true }).click();
-  await page.getByText("Page opened in the existing persistent profile.", { exact: true }).waitFor();
+  await page.waitForTimeout(1200);
+  page.once("dialog", (dialog) => void dialog.accept());
+  await page.getByRole("button", { name: "End Session", exact: true }).click();
+  await page.getByRole("button", { name: "Start Session", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Close Browser", exact: true }).click();
+  await page.getByRole("button", { name: "Start Session", exact: true }).click();
+  await page.getByText("ACTIVE", { exact: true }).first().waitFor();
+  const accumulatedProgress = (await page.locator(".session-card-heading strong").innerText()).trim();
+  assert(/^((?!00:00).)+ \/ 10:00$/.test(accumulatedProgress), `Second same-day session did not show accumulated progress: ${accumulatedProgress}`);
   await page.getByRole("button", { name: "Pause Timer", exact: true }).click();
   await page.getByText("PAUSED", { exact: true }).first().waitFor();
+  await page.getByRole("button", { name: "Open Notifications", exact: true }).click();
+  await page.getByText("Page opened in the existing persistent profile.", { exact: true }).waitFor();
   await page.getByRole("button", { name: "Resume Timer", exact: true }).click();
   await page.getByText("ACTIVE", { exact: true }).first().waitFor();
   await page.getByText("✓ TARGET COMPLETE", { exact: true }).waitFor({ timeout: 20_000 });
   const targetCompleted = await page.evaluate((accountId) => window.onboardingApi.sessionDetail(accountId), seeded.accountId);
-  assert(targetCompleted.sessions[0].status === "COMPLETED" && targetCompleted.sessions[0].completionReason === "TARGET_REACHED" && targetCompleted.dailyProgress[0].completed, "Main-process target completion failed.");
+  assert(targetCompleted.sessions.length === 2 && targetCompleted.sessions[0].status === "COMPLETED" && targetCompleted.sessions[0].completionReason === "TARGET_REACHED" && targetCompleted.sessions[1].completionReason === "OPERATOR_ENDED" && targetCompleted.dailyProgress[0].completed, "Main-process multi-session target completion failed.");
   assert(targetCompleted.account.status === "RUNNING", "Browser should remain open after target completion by default.");
   await page.getByRole("button", { name: "Close Browser", exact: true }).click();
   assert((await page.evaluate((accountId) => window.onboardingApi.sessionDetail(accountId), seeded.accountId)).sessions[0].completionReason === "TARGET_REACHED", "Browser close rewrote completed session history.");
@@ -273,7 +282,7 @@ try {
   assert((await page.locator(".onboarding-detail").innerText()).includes("WARMING"), `Onboarding did not resume: ${await page.locator("body").innerText()}`);
   await page.getByRole("button", { name: "Close Browser", exact: true }).click();
   const onboardingRuntime = await page.evaluate(async (accountId) => ({ onboarding: await window.onboardingApi.get(accountId), sessions: await window.onboardingApi.sessionDetail(accountId) }), seeded.accountId);
-  assert(onboardingRuntime.onboarding.account.onboardingStatus === "READY" && onboardingRuntime.sessions.sessions.length === 1 && onboardingRuntime.sessions.sessions[0].completionReason === "TARGET_REACHED", "Account target session lifecycle failed.");
+  assert(onboardingRuntime.onboarding.account.onboardingStatus === "READY" && onboardingRuntime.sessions.sessions.length === 2 && onboardingRuntime.sessions.sessions[0].completionReason === "TARGET_REACHED", "Account target session lifecycle failed.");
   await open(page, "Dashboard");
   await page.getByText("Scheduled today", { exact: true }).waitFor();
   assert(
@@ -282,7 +291,7 @@ try {
     "Dashboard counters did not use real queue data.",
   );
   assert((await page.evaluate(() => window.dashboardApi.summary())).onboarding.ready === 1, "Dashboard onboarding counters did not update.");
-  const sessionDashboard = await page.evaluate(() => window.dashboardApi.summary()); assert(sessionDashboard.accountSessions.sessionsToday === 2 && sessionDashboard.accountSessions.dailyTargetsCompleted === 1 && sessionDashboard.accountSessions.activeNow === 0, "Dashboard account-session counters did not update deterministically.");
+  const sessionDashboard = await page.evaluate(() => window.dashboardApi.summary()); assert(sessionDashboard.accountSessions.sessionsToday === 3 && sessionDashboard.accountSessions.dailyTargetsCompleted === 1 && sessionDashboard.accountSessions.activeNow === 0, "Dashboard account-session counters did not update deterministically.");
   await open(page, "Planner");
   await page.getByText("ACCOUNT SCHEDULE CONFLICT").first().waitFor();
   await open(page, "Queue");
@@ -348,7 +357,7 @@ try {
     "Scheduler session cap setting did not persist.",
   );
   assert(persisted.settings.requireReadyAccounts === true, "READY scheduler gate setting did not persist.");
-  assert(persisted.onboarding.account.onboardingStatus === "READY" && persisted.accountSessions.sessions.length === 1 && persisted.accountSessions.sessions[0].completionReason === "TARGET_REACHED" && !persisted.accountSessions.activeSession, "Completed target session did not persist safely across restart.");
+  assert(persisted.onboarding.account.onboardingStatus === "READY" && persisted.accountSessions.sessions.length === 2 && persisted.accountSessions.sessions[0].completionReason === "TARGET_REACHED" && persisted.accountSessions.sessions[1].completionReason === "OPERATOR_ENDED" && !persisted.accountSessions.activeSession, "Completed multi-session target did not persist safely across restart.");
   const persistedProxy = persisted.accounts.find((account) => account.name === "QA Proxy Account");
   assert(persistedProxy?.proxyPasswordSaved === true && !persistedProxy.proxyPasswordKey, "Encrypted proxy credential did not persist safely.");
   const restartProxyTest = await second.page.evaluate((account) => window.accountApi.testProxy({ accountId: account.id, proxyProtocol: account.proxyProtocol, proxyHost: account.proxyHost, proxyPort: account.proxyPort, proxyUsername: account.proxyUsername }), persistedProxy);
@@ -376,6 +385,7 @@ try {
         "fixed proxy parser/test/status",
         "encrypted proxy credential restart",
         "main-process target completion and checkpoint priority",
+        "same-day accumulated progress in renderer",
         "restart persistence",
       ],
     }),

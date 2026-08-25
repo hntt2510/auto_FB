@@ -68,6 +68,14 @@ export class OnboardingRepository {
   }
 }
 
-export function onboardingDay(startedAt?: string, planDays?: number, now = new Date()): number | undefined { if (!startedAt || !planDays) return undefined; const elapsed = Math.max(0, now.getTime() - Date.parse(startedAt)); return Math.min(planDays, Math.floor(elapsed / 86_400_000) + 1); }
+export function onboardingDay(startedAt?: string, planDays?: number, now = new Date()): number | undefined {
+  if (!startedAt || !Number.isInteger(planDays) || !planDays || planDays < 1) return undefined;
+  const start = new Date(startedAt);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(now.getTime())) return undefined;
+  const startOrdinal = Date.UTC(start.getFullYear(), start.getMonth(), start.getDate());
+  const nowOrdinal = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+  const calendarDay = Math.floor((nowOrdinal - startOrdinal) / 86_400_000) + 1;
+  return Math.min(planDays, Math.max(1, calendarDay));
+}
 function mapTask(row: TaskRow): WarmUpTask { return { id: row.id, accountId: row.account_id, dayNumber: row.day_number, sortOrder: row.sort_order, type: row.task_type, groupId: row.group_id ?? undefined, groupName: row.group_name ?? undefined, title: row.title, description: row.description, status: row.status, completedAt: row.completed_at ?? undefined, note: row.note ?? undefined, createdAt: row.created_at, updatedAt: row.updated_at }; }
 function mapSession(row: SessionRow): ManualSession { return { id: row.id, accountId: row.account_id, startedAt: row.started_at, endedAt: row.ended_at ?? undefined, durationSeconds: row.duration_seconds ?? undefined }; }

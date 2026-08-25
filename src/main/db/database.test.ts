@@ -51,7 +51,7 @@ describe('workspace persistence', () => {
 
   it('enforces one open account session and recovers abandoned timers', () => withDatabase((db) => {
     const accounts = new AccountRepository(db); const sessions = new AccountSessionRepository(db); const now = '2026-01-01T00:00:00.000Z'; const id = randomUUID(); accounts.insert({ id, name: 'Session migration', profileName: `session-${id}`, profileDirectory: join(tmpdir(), id), proxyEnabled: false, createdAt: now, updatedAt: now });
-    sessions.start({ id: randomUUID(), accountId: id, onboardingDay: 1, targetDurationSeconds: 1800, timestamp: now }); expect(() => sessions.start({ id: randomUUID(), accountId: id, onboardingDay: 1, targetDurationSeconds: 1800, timestamp: now })).toThrow(); expect(sessions.recoverAbandoned('2026-01-01T00:01:00.000Z')).toBe(1); expect(sessions.list(id)[0]).toMatchObject({ status: 'INTERRUPTED', durationSeconds: 60, completionReason: 'APPLICATION_RESTART' });
+    sessions.start({ id: randomUUID(), accountId: id, onboardingDay: 1, targetDurationSeconds: 1800, timestamp: now }); expect(() => sessions.start({ id: randomUUID(), accountId: id, onboardingDay: 1, targetDurationSeconds: 1800, timestamp: now })).toThrow(); expect(sessions.recoverAbandoned('2026-01-01T00:01:00.000Z').count).toBe(1); expect(sessions.list(id)[0]).toMatchObject({ status: 'INTERRUPTED', durationSeconds: 60, completionReason: 'APPLICATION_RESTART' });
   }));
 
   it('applies migration 6 defaults to an account created under schema 5', () => {

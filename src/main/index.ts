@@ -42,7 +42,7 @@ import { OnboardingRepository } from './db/repositories/OnboardingRepository';
 import { OnboardingService } from './services/OnboardingService';
 import { broadcastOnboardingChanged } from './ipc/onboarding.ipc';
 import { AccountSessionRepository } from './db/repositories/AccountSessionRepository';
-import { AccountSessionService } from './services/AccountSessionService';
+import { AccountSessionService, type AccountSessionScheduler } from './services/AccountSessionService';
 
 let service: AccountService | undefined;
 let cleanupIpc: (() => void) | undefined;
@@ -86,7 +86,8 @@ if (!gotLock) {
       encryptString: (value) => safeStorage.encryptString(value),
       decryptString: (value) => safeStorage.decryptString(value)
     }), () => { const paused = onboarding?.syncHealthPauses() ?? 0; if (service) broadcastAccounts(service); if (paused) { broadcastOnboardingChanged(); workspaceNotify(); } }, new ProxyTestService(proxyTestEndpoints()), browserHomeUrl());
-    accountSessions = new AccountSessionService(accountSessionRepository, onboardingRepository, accounts, groups, settings, service, onboarding, audit, () => { if (service) broadcastAccounts(service); broadcastOnboardingChanged(); workspaceNotify(); });
+    const sessionRuntime = accountSessionQaRuntime();
+    accountSessions = new AccountSessionService(accountSessionRepository, onboardingRepository, accounts, groups, settings, service, onboarding, audit, () => { if (service) broadcastAccounts(service); broadcastOnboardingChanged(); workspaceNotify(); }, sessionRuntime?.now, sessionRuntime?.scheduler);
     accountSessions.recoverAbandoned();
     service.browser.setContextCloseObserver((accountId) => accountSessions?.handleBrowserClosed(accountId));
     cleanupIpc = registerIpc(service, () => new Set(BrowserWindow.getAllWindows().map((current) => current.webContents.id)));
@@ -181,3 +182,9 @@ function proxyTestEndpoints(): string[] | undefined {
 }
 
 function browserHomeUrl(): string | undefined { const configured = process.env.FB_BROWSER_HOME_URL; if (!configured) return undefined; try { const url = new URL(configured); return ['http:', 'https:'].includes(url.protocol) ? url.toString() : undefined; } catch { return undefined; } }
+
+function accountSessionQaRuntime(): { now: () => Date; scheduler: AccountSessionScheduler } | undefined {
+  const raw = process.env.FB_ACCOUNT_SESSION_QA_TIME_SCALE; const home = browserHomeUrl(); if (!raw || !home || !process.env.FB_ACCOUNT_MANAGER_USER_DATA) return undefined;
+  const scale = Number(raw); const hostname = new URL(home).hostname; if (!Number.isInteger(scale) || scale < 2 || scale > 3600 || !['127.0.0.1', 'localhost', '::1'].includes(hostname)) return undefined;
+  const wallStart = Date.now(); const logicalStart = wallStart; return { now: () => new Date(logicalStart + (Date.now() - wallStart) * scale), scheduler: { schedule: (callback, delayMs) => setTimeout(callback, Math.max(1, Math.ceil(delayMs / scale))), cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>) } };
+}

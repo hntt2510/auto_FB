@@ -17,7 +17,7 @@ export type WarmUpTaskStatus = 'PENDING' | 'DONE' | 'SKIPPED';
 export type WarmUpTaskType = 'MANUAL_TASK' | 'OPEN_FACEBOOK' | 'OPEN_GROUP' | 'HEALTH_CHECK';
 export type OnboardingTemplateId = 'BASIC_3_DAY' | 'BASIC_5_DAY';
 export type AccountSessionStatus = 'ACTIVE' | 'PAUSED' | 'COMPLETED' | 'INTERRUPTED';
-export type AccountSessionCompletionReason = 'OPERATOR_ENDED' | 'BROWSER_CLOSED' | 'HEALTH_INTERRUPTED' | 'EMERGENCY_STOP' | 'APPLICATION_RESTART' | 'APPLICATION_SHUTDOWN';
+export type AccountSessionCompletionReason = 'TARGET_REACHED' | 'OPERATOR_ENDED' | 'BROWSER_CLOSED' | 'HEALTH_INTERRUPTED' | 'EMERGENCY_STOP' | 'APPLICATION_RESTART' | 'APPLICATION_SHUTDOWN';
 
 export type FacebookAccount = {
   id: string;
@@ -91,6 +91,7 @@ export type ApiErrorCode =
   | 'ACCOUNT_SESSION_NOT_FOUND'
   | 'ACCOUNT_SESSION_INVALID_STATE'
   | 'SESSION_PREFLIGHT_FAILED'
+  | 'DAILY_SESSION_TARGET_ALREADY_REACHED'
   | 'BROWSER_LAUNCH_FAILED'
   | 'BROWSER_NAVIGATION_FAILED'
   | 'DATABASE_ERROR'
@@ -196,7 +197,7 @@ export type OnboardingStartInput = { accountId: string; templateId: OnboardingTe
 export type OnboardingTaskUpdateInput = { taskId: string; title: string; description: string; groupId?: string };
 export type OnboardingTaskStatusInput = { taskId: string; status: WarmUpTaskStatus; note?: string };
 export type AccountSession = { id: string; accountId: string; onboardingDay: number; status: AccountSessionStatus; targetDurationSeconds: number; startedAt: string; activeStartedAt?: string; endedAt?: string; durationSeconds: number; completionReason?: AccountSessionCompletionReason; endingHealthStatus?: HealthStatus; operatorNote?: string; createdAt: string; updatedAt: string };
-export type AccountSessionSettings = { targetDurationMinutes: number };
+export type AccountSessionSettings = { targetDurationMinutes: number; autoCloseBrowserAfterTarget: boolean };
 export type DailySessionProgress = { dayNumber: number; durationSeconds: number; targetDurationSeconds: number; completed: boolean };
 export type ReadyEligibility = { eligible: boolean; requiredDaysCompleted: boolean; healthReady: boolean; proxyReady: boolean; noActiveCheckpoint: boolean };
 export type AccountSessionDetail = { account: FacebookAccount; activeSession?: AccountSession; sessions: AccountSession[]; dailyProgress: DailySessionProgress[]; eligibility: ReadyEligibility; settings: AccountSessionSettings; assignedGroups: FacebookGroup[] };

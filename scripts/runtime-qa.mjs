@@ -30,7 +30,7 @@ async function launch() {
     executablePath: packagedExecutable ?? electronPath,
     args: packagedExecutable ? [] : ["."],
     cwd: process.cwd(),
-    env: { ...process.env, FB_ACCOUNT_MANAGER_USER_DATA: userData, FB_PROXY_TEST_ENDPOINTS: `http://proxy-test.invalid/ip`, FB_BROWSER_HOME_URL: `http://127.0.0.1:${browserPort}/facebook` },
+    env: { ...process.env, FB_ACCOUNT_MANAGER_USER_DATA: userData, FB_PROXY_TEST_ENDPOINTS: `http://proxy-test.invalid/ip`, FB_BROWSER_HOME_URL: `http://127.0.0.1:${browserPort}/facebook`, FB_ACCOUNT_SESSION_QA_TIME_SCALE: "120" },
   });
   activeApplication = application;
   const page = await application.firstWindow();
@@ -156,7 +156,7 @@ try {
   await page.getByRole("button", { name: "Import proxies" }).click();
   await page.locator("textarea.import-text").fill(`127.0.0.1:${proxyPort}\ninvalid proxy`);
   await page.getByRole("button", { name: "Preview" }).click();
-  await page.getByText("Valid").first().waitFor();
+  await page.locator(".import-row.invalid").waitFor();
   assert((await page.getByText("Invalid proxy input", { exact: true }).count()) === 1, "Proxy import preview did not report the invalid row.");
   await page.getByRole("button", { name: "Close" }).click();
   await page.getByRole("button", { name: /Add account/ }).click();
@@ -196,6 +196,7 @@ try {
       profileName: `qa-${suffix}`,
       proxyEnabled: false,
     });
+    const checkpointAccount = await window.accountApi.create({ name: "QA Checkpoint Account", profileName: `qa-checkpoint-${suffix}`, proxyEnabled: false });
     const group = await window.groupApi.create({
       name: "QA Group",
       url: `https://www.facebook.com/groups/qa-${suffix}`,
@@ -224,13 +225,14 @@ try {
       targets: [{ accountId: account.id, groupId: group.id }],
       scheduledAt: new Date(base + 10 * 60_000).toISOString(),
     });
-    return { accountId: account.id, groupId: group.id };
+    return { accountId: account.id, checkpointAccountId: checkpointAccount.id, groupId: group.id };
   });
   await open(page, "Account Onboarding");
   await page.locator(".onboarding-account").filter({ hasText: "QA Account" }).click();
   await page.getByRole("button", { name: "Start onboarding" }).click();
   await page.waitForTimeout(500);
   assert((await page.locator(".onboarding-detail").innerText()).includes("WARMING"), `Onboarding did not start: ${await page.locator("body").innerText()}`);
+  await page.getByLabel("Daily target").selectOption("10");
   await page.getByRole("button", { name: "Start Session", exact: true }).click();
   try {
     await page.waitForFunction(() => document.body.innerText.includes("ACTIVE") || Boolean(document.querySelector(".notice.error")), undefined, { timeout: 60_000 });
@@ -245,10 +247,24 @@ try {
   await page.getByText("PAUSED", { exact: true }).first().waitFor();
   await page.getByRole("button", { name: "Resume Timer", exact: true }).click();
   await page.getByText("ACTIVE", { exact: true }).first().waitFor();
+  await page.getByText("✓ TARGET COMPLETE", { exact: true }).waitFor({ timeout: 20_000 });
+  const targetCompleted = await page.evaluate((accountId) => window.onboardingApi.sessionDetail(accountId), seeded.accountId);
+  assert(targetCompleted.sessions[0].status === "COMPLETED" && targetCompleted.sessions[0].completionReason === "TARGET_REACHED" && targetCompleted.dailyProgress[0].completed, "Main-process target completion failed.");
+  assert(targetCompleted.account.status === "RUNNING", "Browser should remain open after target completion by default.");
+  await page.getByRole("button", { name: "Close Browser", exact: true }).click();
+  assert((await page.evaluate((accountId) => window.onboardingApi.sessionDetail(accountId), seeded.accountId)).sessions[0].completionReason === "TARGET_REACHED", "Browser close rewrote completed session history.");
+  page.once("dialog", (dialog) => void dialog.accept());
+  await page.getByRole("button", { name: "Mark READY" }).click();
+  await page.getByText("READY", { exact: true }).first().waitFor();
+  await page.evaluate((accountId) => window.onboardingApi.start({ accountId, templateId: "BASIC_3_DAY" }), seeded.checkpointAccountId);
+  await page.locator(".onboarding-account").filter({ hasText: "QA Checkpoint Account" }).click();
+  await page.getByRole("button", { name: "Start Session", exact: true }).waitFor();
+  await page.getByRole("button", { name: "Start Session", exact: true }).click();
+  await page.getByText("ACTIVE", { exact: true }).first().waitFor();
   browserFixtureMode = "CHECKPOINT";
   await page.getByRole("button", { name: "Health Check", exact: true }).click();
   await page.getByText("PAUSED", { exact: true }).first().waitFor();
-  assert((await page.evaluate((accountId) => window.onboardingApi.sessionDetail(accountId), seeded.accountId)).sessions[0].status === "INTERRUPTED", "Checkpoint did not interrupt the account session.");
+  assert((await page.evaluate((accountId) => window.onboardingApi.sessionDetail(accountId), seeded.checkpointAccountId)).sessions[0].completionReason === "HEALTH_INTERRUPTED", "Checkpoint did not interrupt the account session before target.");
   browserFixtureMode = "READY";
   await page.getByRole("button", { name: "Health Check", exact: true }).click();
   await page.getByText("Health check: READY", { exact: true }).waitFor();
@@ -256,16 +272,8 @@ try {
   await page.waitForTimeout(500);
   assert((await page.locator(".onboarding-detail").innerText()).includes("WARMING"), `Onboarding did not resume: ${await page.locator("body").innerText()}`);
   await page.getByRole("button", { name: "Close Browser", exact: true }).click();
-  await page.getByRole("button", { name: "Start Session", exact: true }).click();
-  await page.getByText("ACTIVE", { exact: true }).first().waitFor();
-  await page.waitForTimeout(1100);
-  page.once("dialog", (dialog) => void dialog.accept());
-  await page.getByRole("button", { name: "End Session", exact: true }).click();
-  page.once("dialog", (dialog) => void dialog.accept());
-  await page.getByRole("button", { name: "Mark READY" }).click();
-  await page.getByText("READY", { exact: true }).first().waitFor();
   const onboardingRuntime = await page.evaluate(async (accountId) => ({ onboarding: await window.onboardingApi.get(accountId), sessions: await window.onboardingApi.sessionDetail(accountId) }), seeded.accountId);
-  assert(onboardingRuntime.onboarding.account.onboardingStatus === "READY" && onboardingRuntime.sessions.sessions.length === 2 && onboardingRuntime.sessions.sessions[0].durationSeconds >= 1, "Account session lifecycle failed.");
+  assert(onboardingRuntime.onboarding.account.onboardingStatus === "READY" && onboardingRuntime.sessions.sessions.length === 1 && onboardingRuntime.sessions.sessions[0].completionReason === "TARGET_REACHED", "Account target session lifecycle failed.");
   await open(page, "Dashboard");
   await page.getByText("Scheduled today", { exact: true }).waitFor();
   assert(
@@ -274,7 +282,7 @@ try {
     "Dashboard counters did not use real queue data.",
   );
   assert((await page.evaluate(() => window.dashboardApi.summary())).onboarding.ready === 1, "Dashboard onboarding counters did not update.");
-  assert((await page.evaluate(() => window.dashboardApi.summary())).accountSessions.sessionsToday === 2, "Dashboard account-session counters did not update.");
+  const sessionDashboard = await page.evaluate(() => window.dashboardApi.summary()); assert(sessionDashboard.accountSessions.sessionsToday === 2 && sessionDashboard.accountSessions.dailyTargetsCompleted === 1 && sessionDashboard.accountSessions.activeNow === 0, "Dashboard account-session counters did not update deterministically.");
   await open(page, "Planner");
   await page.getByText("ACCOUNT SCHEDULE CONFLICT").first().waitFor();
   await open(page, "Queue");
@@ -340,7 +348,7 @@ try {
     "Scheduler session cap setting did not persist.",
   );
   assert(persisted.settings.requireReadyAccounts === true, "READY scheduler gate setting did not persist.");
-  assert(persisted.onboarding.account.onboardingStatus === "READY" && persisted.accountSessions.sessions.length === 2 && !persisted.accountSessions.activeSession, "Account session state did not persist safely across restart.");
+  assert(persisted.onboarding.account.onboardingStatus === "READY" && persisted.accountSessions.sessions.length === 1 && persisted.accountSessions.sessions[0].completionReason === "TARGET_REACHED" && !persisted.accountSessions.activeSession, "Completed target session did not persist safely across restart.");
   const persistedProxy = persisted.accounts.find((account) => account.name === "QA Proxy Account");
   assert(persistedProxy?.proxyPasswordSaved === true && !persistedProxy.proxyPasswordKey, "Encrypted proxy credential did not persist safely.");
   const restartProxyTest = await second.page.evaluate((account) => window.accountApi.testProxy({ accountId: account.id, proxyProtocol: account.proxyProtocol, proxyHost: account.proxyHost, proxyPort: account.proxyPort, proxyUsername: account.proxyUsername }), persistedProxy);
@@ -367,7 +375,7 @@ try {
         "sanitized exports",
         "fixed proxy parser/test/status",
         "encrypted proxy credential restart",
-        "account session timer/navigation/health interruption",
+        "main-process target completion and checkpoint priority",
         "restart persistence",
       ],
     }),

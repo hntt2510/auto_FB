@@ -40,8 +40,12 @@ export class AccountSessionRepository {
   }
 
   finish(accountId: string, status: Extract<AccountSessionStatus, 'COMPLETED' | 'INTERRUPTED'>, reason: AccountSessionCompletionReason, endingHealthStatus: HealthStatus | undefined, operatorNote: string | undefined, timestamp: string): AccountSession | undefined {
+    const current = this.active(accountId); return current ? this.finishById(current.id, status, reason, endingHealthStatus, operatorNote, timestamp) : undefined;
+  }
+
+  finishById(sessionId: string, status: Extract<AccountSessionStatus, 'COMPLETED' | 'INTERRUPTED'>, reason: AccountSessionCompletionReason, endingHealthStatus: HealthStatus | undefined, operatorNote: string | undefined, timestamp: string): AccountSession | undefined {
     return this.db.transaction(() => {
-      const current = this.active(accountId); if (!current) return undefined;
+      const current = this.get(sessionId); if (!current || !['ACTIVE', 'PAUSED'].includes(current.status)) return undefined;
       this.db.prepare(`UPDATE account_sessions SET status = ?,
         duration_seconds = duration_seconds + CASE WHEN status = 'ACTIVE' AND active_started_at IS NOT NULL THEN MAX(0, unixepoch(?) - unixepoch(active_started_at)) ELSE 0 END,
         active_started_at = NULL, ended_at = ?, completion_reason = ?, ending_health_status = ?, operator_note = ?, updated_at = ?
@@ -50,19 +54,28 @@ export class AccountSessionRepository {
     })();
   }
 
-  recoverAbandoned(timestamp: string): number {
-    return this.db.prepare(`UPDATE account_sessions SET status = 'INTERRUPTED',
-      duration_seconds = duration_seconds + CASE WHEN status = 'ACTIVE' AND active_started_at IS NOT NULL THEN MAX(0, unixepoch(?) - unixepoch(active_started_at)) ELSE 0 END,
-      active_started_at = NULL, ended_at = ?, completion_reason = 'APPLICATION_RESTART', updated_at = ?
-      WHERE status IN ('ACTIVE', 'PAUSED')`).run(timestamp, timestamp, timestamp).changes;
+  recoverAbandoned(timestamp: string): { count: number; finalized: AccountSession[]; completed: AccountSession[] } {
+    return this.db.transaction(() => {
+      const open = this.openSessions(); const finalized: AccountSession[] = [];
+      for (const session of open) { const day = this.dayProgress(session.accountId, session.onboardingDay, session.targetDurationSeconds, timestamp); const reached = day.completed; const result = this.finishById(session.id, reached ? 'COMPLETED' : 'INTERRUPTED', reached ? 'TARGET_REACHED' : 'APPLICATION_RESTART', undefined, undefined, timestamp); if (result) finalized.push(result); }
+      return { count: finalized.length, finalized, completed: finalized.filter((session) => session.completionReason === 'TARGET_REACHED') };
+    })();
   }
 
   dailyProgress(accountId: string, planDays: number, targetDurationSeconds: number, now: string): DailySessionProgress[] {
     const rows = this.db.prepare(`SELECT onboarding_day,
-      SUM(duration_seconds + CASE WHEN status = 'ACTIVE' AND active_started_at IS NOT NULL THEN MAX(0, unixepoch(?) - unixepoch(active_started_at)) ELSE 0 END) AS duration
-      FROM account_sessions WHERE account_id = ? GROUP BY onboarding_day`).all(now, accountId) as Array<{ onboarding_day: number; duration: number }>;
-    const totals = new Map(rows.map((row) => [row.onboarding_day, row.duration]));
-    return Array.from({ length: planDays }, (_, index) => { const durationSeconds = totals.get(index + 1) ?? 0; return { dayNumber: index + 1, durationSeconds, targetDurationSeconds, completed: durationSeconds >= targetDurationSeconds }; });
+      SUM(duration_seconds + CASE WHEN status = 'ACTIVE' AND active_started_at IS NOT NULL THEN MAX(0, unixepoch(?) - unixepoch(active_started_at)) ELSE 0 END) AS duration,
+      MAX(target_duration_seconds) AS target
+      FROM account_sessions WHERE account_id = ? GROUP BY onboarding_day`).all(now, accountId) as Array<{ onboarding_day: number; duration: number; target: number }>;
+    const totals = new Map(rows.map((row) => [row.onboarding_day, row]));
+    return Array.from({ length: planDays }, (_, index) => { const row = totals.get(index + 1); const durationSeconds = row?.duration ?? 0; const target = row?.target ?? targetDurationSeconds; return { dayNumber: index + 1, durationSeconds, targetDurationSeconds: target, completed: durationSeconds >= target }; });
+  }
+
+  dayProgress(accountId: string, dayNumber: number, fallbackTargetDurationSeconds: number, now: string): DailySessionProgress {
+    const row = this.db.prepare(`SELECT
+      SUM(duration_seconds + CASE WHEN status = 'ACTIVE' AND active_started_at IS NOT NULL THEN MAX(0, unixepoch(?) - unixepoch(active_started_at)) ELSE 0 END) AS duration,
+      MAX(target_duration_seconds) AS target FROM account_sessions WHERE account_id = ? AND onboarding_day = ?`).get(now, accountId, dayNumber) as { duration: number | null; target: number | null };
+    const durationSeconds = row.duration ?? 0; const targetDurationSeconds = row.target ?? fallbackTargetDurationSeconds; return { dayNumber, durationSeconds, targetDurationSeconds, completed: durationSeconds >= targetDurationSeconds };
   }
 
   dashboard(from: string, to: string, now: string): { sessionsToday: number; activeNow: number; minutesToday: number; dailyTargetsCompleted: number } {

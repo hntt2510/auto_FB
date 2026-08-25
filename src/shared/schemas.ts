@@ -111,7 +111,7 @@ export const onboardingPauseSchema = z.object({ accountId: accountIdSchema, reas
 export const onboardingNotesSchema = z.object({ accountId: accountIdSchema, notes: z.string().max(4000) });
 export const onboardingTaskUpdateSchema = z.object({ taskId: accountIdSchema, title: z.string().trim().min(1).max(160), description: z.string().max(4000), groupId: groupIdSchema.optional() });
 export const onboardingTaskStatusSchema = z.object({ taskId: accountIdSchema, status: z.enum(['PENDING', 'DONE', 'SKIPPED']), note: z.string().max(1000).optional() });
-export const accountSessionSettingsSchema = z.object({ targetDurationMinutes: z.number().int().min(10).max(60) });
+export const accountSessionSettingsSchema = z.object({ targetDurationMinutes: z.number().int().min(10).max(60), autoCloseBrowserAfterTarget: z.boolean().default(false) });
 export const accountSessionStartSchema = z.object({ accountId: accountIdSchema, targetDurationMinutes: z.number().int().min(10).max(60).optional() });
 export const accountSessionEndSchema = z.object({ accountId: accountIdSchema, operatorNote: z.string().max(2000).optional() });
 export const accountSessionNavigationSchema = z.object({ accountId: accountIdSchema, destination: z.enum(['HOME', 'NOTIFICATIONS', 'URL']), url: z.string().trim().url().max(2048).optional() }).superRefine((value, ctx) => {

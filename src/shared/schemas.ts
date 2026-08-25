@@ -122,3 +122,31 @@ export const accountSessionGroupSchema = z.object({ accountId: accountIdSchema, 
 
 export type CreateAccountData = z.infer<typeof createAccountSchema>;
 export type UpdateAccountData = z.infer<typeof updateAccountSchema>;
+
+// ─── Automated Account Warm-up Engine ──────────────────────────────────────
+
+export const warmupConfigSchema = z.object({
+  durationMinutes: z.number().int().min(5).max(120).default(15),
+  enableLikes: z.boolean().default(false),
+  enableComments: z.boolean().default(false),
+  enableReels: z.boolean().default(true),
+  headless: z.boolean().default(false),
+});
+
+export const warmupStartSchema = z.object({
+  accountId: accountIdSchema,
+  config: warmupConfigSchema.partial().optional(),
+});
+
+export const warmupAccountIdSchema = z.object({ accountId: accountIdSchema });
+
+export const warmupConfigUpdateSchema = z.object({
+  accountId: accountIdSchema,
+  config: warmupConfigSchema.partial(),
+});
+
+export const warmupListLogsSchema = z.object({
+  accountId: accountIdSchema,
+  runId: z.string().uuid().optional(),
+  limit: z.number().int().min(1).max(500).default(100),
+});

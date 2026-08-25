@@ -444,3 +444,63 @@ export type AboutInfo = { appName: string; appVersion: string; databaseSchema: n
 export type OperationsApi = { history: (filter?: PublishHistoryFilter) => Promise<PublishingHistoryRow[]>; exportHistoryCsv: (filter?: PublishHistoryFilter) => Promise<string | undefined>; listBackups: () => Promise<BackupInfo[]>; createBackup: () => Promise<BackupInfo>; restoreBackup: (backupId: string) => Promise<void>; storageUsage: () => Promise<StorageUsage>; cleanDiagnostics: () => Promise<number>; scanOrphanMedia: () => Promise<OrphanMediaScan>; cleanOrphanMedia: (candidateIds: string[]) => Promise<number>; about: () => Promise<AboutInfo> };
 
 export type WorkspaceApi = { groupApi: GroupApi; draftApi: DraftApi; queueApi: QueueApi; dashboardApi: DashboardApi; onboardingApi: OnboardingApi; publishApi: PublishApi; settingsApi: PublishingSettingsApi; operationsApi: OperationsApi };
+
+// ─── Automated Account Warm-up Engine ──────────────────────────────────────
+
+export type WarmupStatus = 'IDLE' | 'RUNNING' | 'PAUSED' | 'DONE' | 'ERROR';
+export type WarmupPhase = 'INITIALIZE' | 'OPEN_WORKSPACE' | 'MAIN_LOOP' | 'FINISH';
+
+export type WarmupConfig = {
+  durationMinutes: number;
+  enableLikes: boolean;
+  enableComments: boolean;
+  enableReels: boolean;
+  headless: boolean;
+};
+
+export const DEFAULT_WARMUP_CONFIG: WarmupConfig = {
+  durationMinutes: 15,
+  enableLikes: false,
+  enableComments: false,
+  enableReels: true,
+  headless: false,
+};
+
+export type WarmupProgress = {
+  id: string;
+  accountId: string;
+  status: WarmupStatus;
+  totalDurationSeconds: number;
+  lastRunAt?: string;
+  lastError?: string;
+  config: WarmupConfig;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type WarmupExecutionLog = {
+  id: string;
+  accountId: string;
+  runId: string;
+  phase: WarmupPhase;
+  action: string;
+  detail?: string;
+  durationMs?: number;
+  ok: boolean;
+  createdAt: string;
+};
+
+export type WarmupStartInput = { accountId: string; config?: Partial<WarmupConfig> };
+export type WarmupListLogsInput = { accountId: string; runId?: string; limit?: number };
+
+export type WarmupApi = {
+  getProgress: (accountId: string) => Promise<WarmupProgress | null>;
+  listAll: () => Promise<WarmupProgress[]>;
+  start: (input: WarmupStartInput) => Promise<WarmupProgress>;
+  stop: (accountId: string) => Promise<WarmupProgress>;
+  pause: (accountId: string) => Promise<WarmupProgress>;
+  resume: (accountId: string) => Promise<WarmupProgress>;
+  updateConfig: (accountId: string, config: Partial<WarmupConfig>) => Promise<WarmupProgress>;
+  getLogs: (input: WarmupListLogsInput) => Promise<WarmupExecutionLog[]>;
+  onChanged: (listener: () => void) => () => void;
+};

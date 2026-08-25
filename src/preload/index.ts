@@ -136,6 +136,24 @@ const operationsApi: OperationsApi = {
   about: () => invoke<AboutInfo>('operations:about')
 };
 
+import type { WarmupApi, WarmupConfig, WarmupExecutionLog, WarmupListLogsInput, WarmupProgress, WarmupStartInput } from '@shared/types';
+
+const warmupApi: WarmupApi = {
+  getProgress: (accountId: string) => invoke<WarmupProgress | null>('warmup:get-progress', accountId),
+  listAll: () => invoke<WarmupProgress[]>('warmup:list-all'),
+  start: (input: WarmupStartInput) => invoke<WarmupProgress>('warmup:start', input),
+  stop: (accountId: string) => invoke<WarmupProgress>('warmup:stop', accountId),
+  pause: (accountId: string) => invoke<WarmupProgress>('warmup:pause', accountId),
+  resume: (accountId: string) => invoke<WarmupProgress>('warmup:resume', accountId),
+  updateConfig: (accountId: string, config: Partial<WarmupConfig>) => invoke<WarmupProgress>('warmup:update-config', { accountId, config }),
+  getLogs: (input: WarmupListLogsInput) => invoke<WarmupExecutionLog[]>('warmup:get-logs', input),
+  onChanged: (listener: () => void) => {
+    const callback = () => listener();
+    ipcRenderer.on('warmup:changed', callback);
+    return () => ipcRenderer.removeListener('warmup:changed', callback);
+  }
+};
+
 contextBridge.exposeInMainWorld('accountApi', accountApi);
 contextBridge.exposeInMainWorld('appBridge', { available: true, version: '1' });
 contextBridge.exposeInMainWorld('logApi', logApi);
@@ -147,3 +165,4 @@ contextBridge.exposeInMainWorld('onboardingApi', onboardingApi);
 contextBridge.exposeInMainWorld('publishApi', publishApi);
 contextBridge.exposeInMainWorld('settingsApi', settingsApi);
 contextBridge.exposeInMainWorld('operationsApi', operationsApi);
+contextBridge.exposeInMainWorld('warmupApi', warmupApi);

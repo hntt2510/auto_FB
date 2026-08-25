@@ -43,6 +43,10 @@ import { OnboardingService } from './services/OnboardingService';
 import { broadcastOnboardingChanged } from './ipc/onboarding.ipc';
 import { AccountSessionRepository } from './db/repositories/AccountSessionRepository';
 import { AccountSessionService, type AccountSessionScheduler } from './services/AccountSessionService';
+import { WarmupRepository } from './db/repositories/WarmupRepository';
+import { WarmupService } from './warmup/WarmupService';
+import { WarmupScheduler } from './warmup/WarmupScheduler';
+import { registerWarmupIpc } from './ipc/warmup.ipc';
 
 let service: AccountService | undefined;
 let cleanupIpc: (() => void) | undefined;
@@ -52,6 +56,7 @@ let scheduler: PublishScheduler | undefined;
 let coordinator: PublishCoordinator | undefined;
 let publishing: PublishingService | undefined;
 let accountSessions: AccountSessionService | undefined;
+let warmupScheduler: WarmupScheduler | undefined;
 
 registerMediaScheme();
 
@@ -81,11 +86,12 @@ if (!gotLock) {
     const onboardingRepository = new OnboardingRepository(database);
     const accountSessionRepository = new AccountSessionRepository(database);
     const onboarding = new OnboardingService(onboardingRepository, accounts, groups, audit, () => { if (service) broadcastAccounts(service); broadcastOnboardingChanged(); workspaceNotify(); });
-    service = new AccountService(accounts, audit, profiles, new SecretStore(settings, {
+    const secretStore = new SecretStore(settings, {
       isEncryptionAvailable: () => safeStorage.isEncryptionAvailable(),
       encryptString: (value) => safeStorage.encryptString(value),
       decryptString: (value) => safeStorage.decryptString(value)
-    }), () => { const paused = onboarding?.syncHealthPauses() ?? 0; if (service) broadcastAccounts(service); if (paused) { broadcastOnboardingChanged(); workspaceNotify(); } }, new ProxyTestService(proxyTestEndpoints()), browserHomeUrl());
+    });
+    service = new AccountService(accounts, audit, profiles, secretStore, () => { const paused = onboarding?.syncHealthPauses() ?? 0; if (service) broadcastAccounts(service); if (paused) { broadcastOnboardingChanged(); workspaceNotify(); } }, new ProxyTestService(proxyTestEndpoints()), browserHomeUrl());
     const sessionRuntime = accountSessionQaRuntime();
     accountSessions = new AccountSessionService(accountSessionRepository, onboardingRepository, accounts, groups, settings, service, onboarding, audit, () => { if (service) broadcastAccounts(service); broadcastOnboardingChanged(); workspaceNotify(); }, sessionRuntime?.now, sessionRuntime?.scheduler);
     accountSessions.recoverAbandoned();
@@ -113,6 +119,13 @@ if (!gotLock) {
       settings: publishingSettings,
       operations
     }, () => new Set(BrowserWindow.getAllWindows().map((current) => current.webContents.id))));
+    // Warmup Engine
+    const warmupNotify = () => { for (const win of BrowserWindow.getAllWindows()) win.webContents.send('warmup:changed'); };
+    const warmupRepo = new WarmupRepository(database);
+    const warmupService = new WarmupService(warmupRepo, accounts, profiles, secretStore, warmupNotify);
+    cleanupIpc = chainCleanup(cleanupIpc, registerWarmupIpc(warmupService, () => new Set(BrowserWindow.getAllWindows().map((w) => w.webContents.id))));
+    warmupScheduler = new WarmupScheduler(warmupRepo, accounts, warmupService);
+    warmupScheduler.start();
     createWindow();
     app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
   }).catch((error) => {
@@ -125,6 +138,7 @@ if (!gotLock) {
     event.preventDefault();
     quitting = true;
     scheduler?.stop();
+    warmupScheduler?.stop();
     void (async () => {
       const drained = await coordinator?.stopAndDrain(20000) ?? true;
       if (!drained) { await service!.browser.abortRunningContexts(); await coordinator?.stopAndDrain(5000); publishing?.recover(); }

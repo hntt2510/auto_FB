@@ -78,6 +78,8 @@ async function open(page, label) {
             ? "Publishing Operations"
             : label === "Dashboard"
               ? "Operations Dashboard"
+              : label === "Account Onboarding"
+                ? "Account Session Assistant"
               : label,
     })
     .waitFor();
@@ -229,33 +231,41 @@ try {
   await page.getByRole("button", { name: "Start onboarding" }).click();
   await page.waitForTimeout(500);
   assert((await page.locator(".onboarding-detail").innerText()).includes("WARMING"), `Onboarding did not start: ${await page.locator("body").innerText()}`);
-  await page.locator(".warmup-task.today").first().getByRole("button", { name: "Done" }).click();
-  await page.getByRole("button", { name: "Start session" }).click();
-  await page.waitForTimeout(1100);
-  await page.getByRole("button", { name: "Stop session" }).click();
-  await page.locator(".onboarding-toolbar").getByRole("button", { name: "Open Facebook", exact: true }).click();
+  await page.getByRole("button", { name: "Start Session", exact: true }).click();
   try {
-    await page.waitForFunction(() => document.body.innerText.includes("Close browser") || Boolean(document.querySelector(".notice.error")), undefined, { timeout: 60_000 });
+    await page.waitForFunction(() => document.body.innerText.includes("ACTIVE") || Boolean(document.querySelector(".notice.error")), undefined, { timeout: 60_000 });
   } catch (error) {
     const state = await page.evaluate(async (accountId) => ({ account: await window.accountApi.list().then((accounts) => accounts.find((account) => account.id === accountId)), body: document.body.innerText }), seeded.accountId);
-    throw new Error(`Persistent browser wait failed: ${error instanceof Error ? error.message : String(error)}\nAccount: ${JSON.stringify(state.account)}\nUI: ${state.body}`);
+    throw new Error(`Account session wait failed: ${error instanceof Error ? error.message : String(error)}\nAccount: ${JSON.stringify(state.account)}\nUI: ${state.body}`);
   }
-  assert((await page.locator("body").innerText()).includes("Close browser"), `Persistent browser did not open: ${await page.locator("body").innerText()}`);
-  browserFixtureMode = "CHECKPOINT";
-  await page.locator(".warmup-task").filter({ hasText: "Verify session health" }).getByRole("button", { name: "Health check" }).click();
+  assert((await page.locator("body").innerText()).includes("ACTIVE"), `Account session did not start: ${await page.locator("body").innerText()}`);
+  await page.getByRole("button", { name: "Open Notifications", exact: true }).click();
+  await page.getByText("Page opened in the existing persistent profile.", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Pause Timer", exact: true }).click();
   await page.getByText("PAUSED", { exact: true }).first().waitFor();
+  await page.getByRole("button", { name: "Resume Timer", exact: true }).click();
+  await page.getByText("ACTIVE", { exact: true }).first().waitFor();
+  browserFixtureMode = "CHECKPOINT";
+  await page.getByRole("button", { name: "Health Check", exact: true }).click();
+  await page.getByText("PAUSED", { exact: true }).first().waitFor();
+  assert((await page.evaluate((accountId) => window.onboardingApi.sessionDetail(accountId), seeded.accountId)).sessions[0].status === "INTERRUPTED", "Checkpoint did not interrupt the account session.");
   browserFixtureMode = "READY";
-  await page.locator(".warmup-task").filter({ hasText: "Verify session health" }).getByRole("button", { name: "Health check" }).click();
+  await page.getByRole("button", { name: "Health Check", exact: true }).click();
   await page.getByText("Health check: READY", { exact: true }).waitFor();
-  await page.getByRole("button", { name: "Resume warm-up" }).click();
+  await page.getByRole("button", { name: "Resume onboarding" }).click();
   await page.waitForTimeout(500);
   assert((await page.locator(".onboarding-detail").innerText()).includes("WARMING"), `Onboarding did not resume: ${await page.locator("body").innerText()}`);
-  await page.getByRole("button", { name: "Close browser" }).click();
+  await page.getByRole("button", { name: "Close Browser", exact: true }).click();
+  await page.getByRole("button", { name: "Start Session", exact: true }).click();
+  await page.getByText("ACTIVE", { exact: true }).first().waitFor();
+  await page.waitForTimeout(1100);
+  page.once("dialog", (dialog) => void dialog.accept());
+  await page.getByRole("button", { name: "End Session", exact: true }).click();
   page.once("dialog", (dialog) => void dialog.accept());
   await page.getByRole("button", { name: "Mark READY" }).click();
   await page.getByText("READY", { exact: true }).first().waitFor();
-  const onboardingRuntime = await page.evaluate((accountId) => window.onboardingApi.get(accountId), seeded.accountId);
-  assert(onboardingRuntime.account.onboardingStatus === "READY" && onboardingRuntime.completedTasks >= 1 && onboardingRuntime.sessions[0].durationSeconds >= 1, "Onboarding checklist/session lifecycle failed.");
+  const onboardingRuntime = await page.evaluate(async (accountId) => ({ onboarding: await window.onboardingApi.get(accountId), sessions: await window.onboardingApi.sessionDetail(accountId) }), seeded.accountId);
+  assert(onboardingRuntime.onboarding.account.onboardingStatus === "READY" && onboardingRuntime.sessions.sessions.length === 2 && onboardingRuntime.sessions.sessions[0].durationSeconds >= 1, "Account session lifecycle failed.");
   await open(page, "Dashboard");
   await page.getByText("Scheduled today", { exact: true }).waitFor();
   assert(
@@ -264,6 +274,7 @@ try {
     "Dashboard counters did not use real queue data.",
   );
   assert((await page.evaluate(() => window.dashboardApi.summary())).onboarding.ready === 1, "Dashboard onboarding counters did not update.");
+  assert((await page.evaluate(() => window.dashboardApi.summary())).accountSessions.sessionsToday === 2, "Dashboard account-session counters did not update.");
   await open(page, "Planner");
   await page.getByText("ACCOUNT SCHEDULE CONFLICT").first().waitFor();
   await open(page, "Queue");
@@ -288,7 +299,7 @@ try {
     groupOps: await window.groupApi.operations(),
   }));
   assert(
-    maintenance.backup.schemaVersion === 6,
+    maintenance.backup.schemaVersion === 7,
     "Backup schema validation failed.",
   );
   assert(
@@ -317,6 +328,7 @@ try {
     settings: await window.settingsApi.getPublishing(),
     accounts: await window.accountApi.list(),
     onboarding: await window.onboardingApi.get(onboardingAccountId),
+    accountSessions: await window.onboardingApi.sessionDetail(onboardingAccountId),
   }), seeded.accountId);
   assert(persisted.queue.length === 2, "Queue did not persist across restart.");
   assert(
@@ -328,7 +340,7 @@ try {
     "Scheduler session cap setting did not persist.",
   );
   assert(persisted.settings.requireReadyAccounts === true, "READY scheduler gate setting did not persist.");
-  assert(persisted.onboarding.account.onboardingStatus === "READY" && persisted.onboarding.sessions.length === 1, "Onboarding state did not persist across restart.");
+  assert(persisted.onboarding.account.onboardingStatus === "READY" && persisted.accountSessions.sessions.length === 2 && !persisted.accountSessions.activeSession, "Account session state did not persist safely across restart.");
   const persistedProxy = persisted.accounts.find((account) => account.name === "QA Proxy Account");
   assert(persistedProxy?.proxyPasswordSaved === true && !persistedProxy.proxyPasswordKey, "Encrypted proxy credential did not persist safely.");
   const restartProxyTest = await second.page.evaluate((account) => window.accountApi.testProxy({ accountId: account.id, proxyProtocol: account.proxyProtocol, proxyHost: account.proxyHost, proxyPort: account.proxyPort, proxyUsername: account.proxyUsername }), persistedProxy);
@@ -355,7 +367,7 @@ try {
         "sanitized exports",
         "fixed proxy parser/test/status",
         "encrypted proxy credential restart",
-        "manual onboarding checklist/session/health pause",
+        "account session timer/navigation/health interruption",
         "restart persistence",
       ],
     }),

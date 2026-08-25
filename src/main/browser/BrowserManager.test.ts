@@ -99,6 +99,12 @@ describe('BrowserManager lifecycle serialization', () => {
     expect(manager.isRunning(accountId)).toBe(false);
   });
 
+  it('notifies the managed-session lifecycle exactly once when its context closes', async () => {
+    const runtime = makeContext(); const { manager } = fixture(async () => runtime.context as never); const observer = vi.fn(); manager.setContextCloseObserver(observer);
+    await manager.openAccount(accountId); runtime.triggerClose(); await manager.closeAccount(accountId);
+    await vi.waitFor(() => expect(observer).toHaveBeenCalledTimes(1)); expect(observer).toHaveBeenCalledWith(accountId);
+  });
+
   it('waits for a pending launch before closeAll clears locks', async () => {
     const gate = deferred<ReturnType<typeof makeContext>['context']>();
     const launcher = vi.fn(async () => gate.promise) as unknown as PersistentContextLauncher;

@@ -42,6 +42,15 @@ export class OnboardingRepository {
   task(id: string): WarmUpTask | undefined { const row = this.db.prepare('SELECT t.*, g.name AS group_name FROM account_onboarding_tasks t LEFT JOIN groups g ON g.id = t.group_id WHERE t.id = ?').get(id) as TaskRow | undefined; return row ? mapTask(row) : undefined; }
   updateTask(id: string, title: string, description: string, groupId: string | undefined, timestamp: string): WarmUpTask | undefined { this.db.prepare('UPDATE account_onboarding_tasks SET title = ?, description = ?, group_id = ?, updated_at = ? WHERE id = ?').run(title, description, groupId ?? null, timestamp, id); return this.task(id); }
   setTaskStatus(id: string, status: WarmUpTaskStatus, note: string | undefined, timestamp: string): WarmUpTask | undefined { this.db.prepare("UPDATE account_onboarding_tasks SET status = ?, completed_at = CASE WHEN ? = 'PENDING' THEN NULL ELSE ? END, note = ?, updated_at = ? WHERE id = ?").run(status, status, timestamp, note ?? null, timestamp, id); return this.task(id); }
+  completeSystemTasks(accountId: string, dayNumber: number, types: WarmUpTaskType[], timestamp: string): number {
+    if (!types.length) return 0;
+    const placeholders = types.map(() => '?').join(', ');
+    return this.db.prepare(`UPDATE account_onboarding_tasks SET status = 'DONE', completed_at = ?, note = 'Completed from an observable local session event.', updated_at = ? WHERE account_id = ? AND day_number = ? AND status = 'PENDING' AND task_type IN (${placeholders})`).run(timestamp, timestamp, accountId, dayNumber, ...types).changes;
+  }
+  completeDailySessionTask(accountId: string, dayNumber: number, timestamp: string): number {
+    return this.db.prepare("UPDATE account_onboarding_tasks SET status = 'DONE', completed_at = ?, note = 'Daily account session target reached.', updated_at = ? WHERE account_id = ? AND day_number = ? AND status = 'PENDING' AND task_type = 'MANUAL_TASK' AND lower(title) LIKE '%session%'").run(timestamp, timestamp, accountId, dayNumber).changes;
+  }
+  recordSessionEnd(accountId: string, timestamp: string): void { this.db.prepare('UPDATE accounts SET last_manual_session_at = ?, updated_at = ? WHERE id = ?').run(timestamp, timestamp, accountId); }
 
   sessions(accountId: string, limit = 20): ManualSession[] { return (this.db.prepare('SELECT * FROM manual_sessions WHERE account_id = ? ORDER BY started_at DESC LIMIT ?').all(accountId, limit) as SessionRow[]).map(mapSession); }
   activeSession(accountId: string): ManualSession | undefined { const row = this.db.prepare('SELECT * FROM manual_sessions WHERE account_id = ? AND ended_at IS NULL').get(accountId) as SessionRow | undefined; return row ? mapSession(row) : undefined; }

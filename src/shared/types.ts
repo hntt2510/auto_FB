@@ -16,6 +16,8 @@ export type OnboardingStatus = 'NEW' | 'WARMING' | 'READY' | 'PAUSED';
 export type WarmUpTaskStatus = 'PENDING' | 'DONE' | 'SKIPPED';
 export type WarmUpTaskType = 'MANUAL_TASK' | 'OPEN_FACEBOOK' | 'OPEN_GROUP' | 'HEALTH_CHECK';
 export type OnboardingTemplateId = 'BASIC_3_DAY' | 'BASIC_5_DAY';
+export type AccountSessionStatus = 'ACTIVE' | 'PAUSED' | 'COMPLETED' | 'INTERRUPTED';
+export type AccountSessionCompletionReason = 'OPERATOR_ENDED' | 'BROWSER_CLOSED' | 'HEALTH_INTERRUPTED' | 'EMERGENCY_STOP' | 'APPLICATION_RESTART' | 'APPLICATION_SHUTDOWN';
 
 export type FacebookAccount = {
   id: string;
@@ -85,6 +87,10 @@ export type ApiErrorCode =
   | 'ONBOARDING_INVALID_STATE'
   | 'ONBOARDING_TASK_NOT_FOUND'
   | 'MANUAL_SESSION_ACTIVE'
+  | 'ACCOUNT_SESSION_ACTIVE'
+  | 'ACCOUNT_SESSION_NOT_FOUND'
+  | 'ACCOUNT_SESSION_INVALID_STATE'
+  | 'SESSION_PREFLIGHT_FAILED'
   | 'BROWSER_LAUNCH_FAILED'
   | 'BROWSER_NAVIGATION_FAILED'
   | 'DATABASE_ERROR'
@@ -189,7 +195,17 @@ export type OnboardingOverview = { counts: Record<OnboardingStatus, number>; tod
 export type OnboardingStartInput = { accountId: string; templateId: OnboardingTemplateId };
 export type OnboardingTaskUpdateInput = { taskId: string; title: string; description: string; groupId?: string };
 export type OnboardingTaskStatusInput = { taskId: string; status: WarmUpTaskStatus; note?: string };
-export type OnboardingApi = { templates: () => Promise<OnboardingPlanTemplate[]>; overview: () => Promise<OnboardingOverview>; get: (accountId: string) => Promise<AccountOnboarding>; start: (input: OnboardingStartInput) => Promise<AccountOnboarding>; pause: (accountId: string, reason?: string) => Promise<AccountOnboarding>; resume: (accountId: string) => Promise<AccountOnboarding>; markReady: (accountId: string) => Promise<AccountOnboarding>; updateNotes: (accountId: string, notes: string) => Promise<AccountOnboarding>; updateTask: (input: OnboardingTaskUpdateInput) => Promise<WarmUpTask>; setTaskStatus: (input: OnboardingTaskStatusInput) => Promise<WarmUpTask>; startSession: (accountId: string) => Promise<ManualSession>; stopSession: (accountId: string) => Promise<ManualSession>; onChanged: (listener: () => void) => () => void };
+export type AccountSession = { id: string; accountId: string; onboardingDay: number; status: AccountSessionStatus; targetDurationSeconds: number; startedAt: string; activeStartedAt?: string; endedAt?: string; durationSeconds: number; completionReason?: AccountSessionCompletionReason; endingHealthStatus?: HealthStatus; operatorNote?: string; createdAt: string; updatedAt: string };
+export type AccountSessionSettings = { targetDurationMinutes: number };
+export type DailySessionProgress = { dayNumber: number; durationSeconds: number; targetDurationSeconds: number; completed: boolean };
+export type ReadyEligibility = { eligible: boolean; requiredDaysCompleted: boolean; healthReady: boolean; proxyReady: boolean; noActiveCheckpoint: boolean };
+export type AccountSessionDetail = { account: FacebookAccount; activeSession?: AccountSession; sessions: AccountSession[]; dailyProgress: DailySessionProgress[]; eligibility: ReadyEligibility; settings: AccountSessionSettings; assignedGroups: FacebookGroup[] };
+export type AccountSessionStartInput = { accountId: string; targetDurationMinutes?: number };
+export type AccountSessionEndInput = { accountId: string; operatorNote?: string };
+export type AccountSessionNavigationInput = { accountId: string; destination: 'HOME' | 'NOTIFICATIONS' | 'URL'; url?: string };
+export type AccountSessionNavigationResult = { accountId: string; status: 'OPENED' | 'LOGIN_REQUIRED' | 'CHECKPOINT' | 'ERROR'; reason?: string };
+export type AccountSessionDashboard = { sessionsToday: number; activeNow: number; minutesToday: number; dailyTargetsCompleted: number; requiringManualAction: number };
+export type OnboardingApi = { templates: () => Promise<OnboardingPlanTemplate[]>; overview: () => Promise<OnboardingOverview>; get: (accountId: string) => Promise<AccountOnboarding>; start: (input: OnboardingStartInput) => Promise<AccountOnboarding>; pause: (accountId: string, reason?: string) => Promise<AccountOnboarding>; resume: (accountId: string) => Promise<AccountOnboarding>; markReady: (accountId: string) => Promise<AccountOnboarding>; updateNotes: (accountId: string, notes: string) => Promise<AccountOnboarding>; updateTask: (input: OnboardingTaskUpdateInput) => Promise<WarmUpTask>; setTaskStatus: (input: OnboardingTaskStatusInput) => Promise<WarmUpTask>; startSession: (accountId: string) => Promise<ManualSession>; stopSession: (accountId: string) => Promise<ManualSession>; sessionDetail: (accountId: string) => Promise<AccountSessionDetail>; startAssistedSession: (input: AccountSessionStartInput) => Promise<AccountSessionDetail>; pauseAssistedSession: (accountId: string) => Promise<AccountSessionDetail>; resumeAssistedSession: (accountId: string) => Promise<AccountSessionDetail>; endAssistedSession: (input: AccountSessionEndInput) => Promise<AccountSessionDetail>; navigateSession: (input: AccountSessionNavigationInput) => Promise<AccountSessionNavigationResult>; openSessionGroup: (accountId: string, groupId: string) => Promise<AccountSessionNavigationResult>; updateSessionSettings: (settings: AccountSessionSettings) => Promise<AccountSessionSettings>; stopAllSessions: () => Promise<number>; onChanged: (listener: () => void) => () => void };
 
 export type DeleteAccountInput = {
   accountId: string;
@@ -314,6 +330,7 @@ export type DashboardSummary = {
   today: { scheduled: number; due: number; running: number; submitted: number; succeeded: number; failed: number; needsAttention: number };
   accountStatuses: { ready: number; loginRequired: number; checkpoint: number; blocked: number; unknown: number };
   onboarding: { new: number; warming: number; ready: number; paused: number; todayTasks: number };
+  accountSessions: AccountSessionDashboard;
   recentPublishing: PublishingHistoryRow[];
   attention: QueueItem[];
   recentQueue: QueueItem[];

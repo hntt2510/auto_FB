@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 
-export const LATEST_SCHEMA_VERSION = 6;
+export const LATEST_SCHEMA_VERSION = 7;
 
 export function runMigrations(db: Database.Database): void {
   db.exec(`
@@ -344,6 +344,28 @@ export function runMigrations(db: Database.Database): void {
       );
       CREATE INDEX idx_manual_sessions_account ON manual_sessions(account_id, started_at DESC);
       CREATE UNIQUE INDEX idx_manual_sessions_one_active ON manual_sessions(account_id) WHERE ended_at IS NULL;
+    `],
+    [7, `
+      CREATE TABLE account_sessions (
+        id TEXT PRIMARY KEY,
+        account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        onboarding_day INTEGER NOT NULL CHECK (onboarding_day BETWEEN 1 AND 30),
+        status TEXT NOT NULL CHECK (status IN ('ACTIVE', 'PAUSED', 'COMPLETED', 'INTERRUPTED')),
+        target_duration_seconds INTEGER NOT NULL CHECK (target_duration_seconds BETWEEN 600 AND 3600),
+        started_at TEXT NOT NULL,
+        active_started_at TEXT,
+        ended_at TEXT,
+        duration_seconds INTEGER NOT NULL DEFAULT 0 CHECK (duration_seconds >= 0),
+        completion_reason TEXT,
+        ending_health_status TEXT CHECK (ending_health_status IS NULL OR ending_health_status IN ('READY', 'LOGIN_REQUIRED', 'CHECKPOINT', 'ERROR')),
+        operator_note TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_account_sessions_account_started ON account_sessions(account_id, started_at DESC);
+      CREATE INDEX idx_account_sessions_status_started ON account_sessions(status, started_at DESC);
+      CREATE INDEX idx_account_sessions_day ON account_sessions(account_id, onboarding_day, status);
+      CREATE UNIQUE INDEX idx_account_sessions_one_open ON account_sessions(account_id) WHERE status IN ('ACTIVE', 'PAUSED');
     `]
   ];
 

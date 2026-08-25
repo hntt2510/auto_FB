@@ -41,6 +41,8 @@ import { ProxyTestService } from './proxy/ProxyTestService';
 import { OnboardingRepository } from './db/repositories/OnboardingRepository';
 import { OnboardingService } from './services/OnboardingService';
 import { broadcastOnboardingChanged } from './ipc/onboarding.ipc';
+import { AccountSessionRepository } from './db/repositories/AccountSessionRepository';
+import { AccountSessionService } from './services/AccountSessionService';
 
 let service: AccountService | undefined;
 let cleanupIpc: (() => void) | undefined;
@@ -49,6 +51,7 @@ let database: Database.Database | undefined;
 let scheduler: PublishScheduler | undefined;
 let coordinator: PublishCoordinator | undefined;
 let publishing: PublishingService | undefined;
+let accountSessions: AccountSessionService | undefined;
 
 registerMediaScheme();
 
@@ -75,12 +78,17 @@ if (!gotLock) {
     const liveReadiness = new LiveReadinessService(accounts, groups, publishRepository, media);
     const diagnostics = new PublishDiagnostics(paths.diagnostics);
     const workspaceNotify = () => { broadcastPublishingChanged(); };
-    const onboarding = new OnboardingService(new OnboardingRepository(database), accounts, groups, audit, () => { if (service) broadcastAccounts(service); broadcastOnboardingChanged(); workspaceNotify(); });
+    const onboardingRepository = new OnboardingRepository(database);
+    const accountSessionRepository = new AccountSessionRepository(database);
+    const onboarding = new OnboardingService(onboardingRepository, accounts, groups, audit, () => { if (service) broadcastAccounts(service); broadcastOnboardingChanged(); workspaceNotify(); });
     service = new AccountService(accounts, audit, profiles, new SecretStore(settings, {
       isEncryptionAvailable: () => safeStorage.isEncryptionAvailable(),
       encryptString: (value) => safeStorage.encryptString(value),
       decryptString: (value) => safeStorage.decryptString(value)
     }), () => { const paused = onboarding?.syncHealthPauses() ?? 0; if (service) broadcastAccounts(service); if (paused) { broadcastOnboardingChanged(); workspaceNotify(); } }, new ProxyTestService(proxyTestEndpoints()), browserHomeUrl());
+    accountSessions = new AccountSessionService(accountSessionRepository, onboardingRepository, accounts, groups, settings, service, onboarding, audit, () => { if (service) broadcastAccounts(service); broadcastOnboardingChanged(); workspaceNotify(); });
+    accountSessions.recoverAbandoned();
+    service.browser.setContextCloseObserver((accountId) => accountSessions?.handleBrowserClosed(accountId));
     cleanupIpc = registerIpc(service, () => new Set(BrowserWindow.getAllWindows().map((current) => current.webContents.id)));
     registerMediaProtocol(drafts, media);
     const executor = new PublishExecutor(queue, publishRepository, accounts, groups, profiles, service.browser, new FacebookPublisher(new FacebookComposerAdapter(), media), diagnostics, audit, workspaceNotify, liveReadiness);
@@ -89,16 +97,17 @@ if (!gotLock) {
     scheduler = new PublishScheduler(queue, coordinator, publishingSettings, workspaceNotify, (accountId) => accounts.get(accountId)?.onboardingStatus === 'READY');
     const operationsReport = new OperationsReportService(accounts, queue, publishRepository, publishingSettings, executor.selectorVersion, app.getVersion(), scheduler);
     publishing = new PublishingService(queue, publishRepository, accounts, groups, media, executor, coordinator, scheduler, publishingSettings, diagnostics, audit, workspaceNotify, liveReadiness, operationsReport);
-    publishing.recover(); service.setHealthObserver((result) => publishing?.handleHealthResult(result)); scheduler.start();
+    publishing.recover(); service.setHealthObserver((result) => { publishing?.handleHealthResult(result); accountSessions?.handleHealthResult(result); }); scheduler.start();
     const operations = new OperationsService(database, paths, publishRepository, scheduler, audit, { appName: 'Facebook Account Manager', appVersion: app.getVersion(), databaseSchema: LATEST_SCHEMA_VERSION, selectorVersion: executor.selectorVersion, electronVersion: process.versions.electron, playwrightVersion: dependencyVersion('playwright') }, async (backupPath) => {
-      scheduler?.stop(); await service?.browser.closeAll(); cleanupIpc?.(); database?.close(); database = undefined; const temporary = paths.database + '.restore'; await rm(temporary, { force: true }); await copyFile(backupPath, temporary); await rm(paths.database + '-wal', { force: true }); await rm(paths.database + '-shm', { force: true }); await rm(paths.database, { force: true }); await rename(temporary, paths.database); quitting = true; app.relaunch(); app.exit(0);
+      scheduler?.stop(); await accountSessions?.stopAll('APPLICATION_SHUTDOWN'); await service?.browser.closeAll(); cleanupIpc?.(); database?.close(); database = undefined; const temporary = paths.database + '.restore'; await rm(temporary, { force: true }); await copyFile(backupPath, temporary); await rm(paths.database + '-wal', { force: true }); await rm(paths.database + '-shm', { force: true }); await rm(paths.database, { force: true }); await rename(temporary, paths.database); quitting = true; app.relaunch(); app.exit(0);
     });
     cleanupIpc = chainCleanup(cleanupIpc, registerWorkspaceIpc({
       groups: new GroupService(groups, accounts, queue, service.browser, audit, workspaceNotify),
       drafts: new DraftService(drafts, queue, media, audit, workspaceNotify),
       queue: new QueueService(queue, drafts, accounts, groups, media, audit, workspaceNotify),
-      dashboard: new DashboardService(database, publishingSettings),
+      dashboard: new DashboardService(database, publishingSettings, accountSessionRepository),
       onboarding,
+      accountSessions,
       publishing,
       settings: publishingSettings,
       operations
@@ -118,6 +127,7 @@ if (!gotLock) {
     void (async () => {
       const drained = await coordinator?.stopAndDrain(20000) ?? true;
       if (!drained) { await service!.browser.abortRunningContexts(); await coordinator?.stopAndDrain(5000); publishing?.recover(); }
+      await accountSessions?.stopAll('APPLICATION_SHUTDOWN');
       await service!.browser.closeAll();
     })().finally(() => { cleanupIpc?.(); database?.close(); app.quit(); });
   });

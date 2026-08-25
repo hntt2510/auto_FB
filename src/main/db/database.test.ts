@@ -12,6 +12,7 @@ import { GroupRepository } from './repositories/GroupRepository';
 import { DraftRepository } from './repositories/DraftRepository';
 import { QueueRepository } from './repositories/QueueRepository';
 import { PublishRepository } from './repositories/PublishRepository';
+import { AccountSessionRepository } from './repositories/AccountSessionRepository';
 
 function withDatabase(run: (db: ReturnType<typeof openDatabase>) => void): void {
   const root = mkdtempSync(join(tmpdir(), 'fb-ops-'));
@@ -34,9 +35,9 @@ describe('workspace persistence', () => {
   }));
 
   it('creates workspace tables with foreign keys and survives reopen', () => withDatabase((db) => {
-    expect(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all()).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }]);
+    expect(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all()).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }]);
     expect(db.pragma('foreign_keys')).toEqual([{ foreign_keys: 1 }]);
-    for (const table of ['groups', 'group_tags', 'account_groups', 'drafts', 'media_assets', 'draft_media', 'queue_items', 'queue_item_media', 'publish_attempts', 'publish_attempt_events', 'publish_receipts', 'account_publish_blocks', 'publish_reconciliations', 'selector_probes', 'publish_preflights', 'account_onboarding_tasks', 'manual_sessions']) {
+    for (const table of ['groups', 'group_tags', 'account_groups', 'drafts', 'media_assets', 'draft_media', 'queue_items', 'queue_item_media', 'publish_attempts', 'publish_attempt_events', 'publish_receipts', 'account_publish_blocks', 'publish_reconciliations', 'selector_probes', 'publish_preflights', 'account_onboarding_tasks', 'manual_sessions', 'account_sessions']) {
       expect(db.prepare('SELECT name FROM sqlite_master WHERE type = \'table\' AND name = ?').get(table)).toEqual({ name: table });
     }
   }));
@@ -48,12 +49,17 @@ describe('workspace persistence', () => {
     expect(db.prepare("SELECT onboarding_status FROM accounts WHERE id = ?").get(id)).toEqual({ onboarding_status: 'NEW' });
   }));
 
+  it('enforces one open account session and recovers abandoned timers', () => withDatabase((db) => {
+    const accounts = new AccountRepository(db); const sessions = new AccountSessionRepository(db); const now = '2026-01-01T00:00:00.000Z'; const id = randomUUID(); accounts.insert({ id, name: 'Session migration', profileName: `session-${id}`, profileDirectory: join(tmpdir(), id), proxyEnabled: false, createdAt: now, updatedAt: now });
+    sessions.start({ id: randomUUID(), accountId: id, onboardingDay: 1, targetDurationSeconds: 1800, timestamp: now }); expect(() => sessions.start({ id: randomUUID(), accountId: id, onboardingDay: 1, targetDurationSeconds: 1800, timestamp: now })).toThrow(); expect(sessions.recoverAbandoned('2026-01-01T00:01:00.000Z')).toBe(1); expect(sessions.list(id)[0]).toMatchObject({ status: 'INTERRUPTED', durationSeconds: 60, completionReason: 'APPLICATION_RESTART' });
+  }));
+
   it('applies migration 6 defaults to an account created under schema 5', () => {
     const root = mkdtempSync(join(tmpdir(), 'fb-schema5-')); const path = join(root, 'schema5.db'); const db = new Database(path);
     try {
       db.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL); CREATE TABLE accounts (id TEXT PRIMARY KEY, updated_at TEXT NOT NULL); CREATE TABLE groups (id TEXT PRIMARY KEY); INSERT INTO accounts (id, updated_at) VALUES ('legacy-account', '2026-01-01T00:00:00.000Z');");
       const insert = db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)'); for (let version = 1; version <= 5; version++) insert.run(version, '2026-01-01T00:00:00.000Z');
-      runMigrations(db); expect(db.prepare("SELECT onboarding_status, onboarding_started_at FROM accounts WHERE id = 'legacy-account'").get()).toEqual({ onboarding_status: 'NEW', onboarding_started_at: null }); expect(db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get()).toEqual({ version: 6 });
+      runMigrations(db); expect(db.prepare("SELECT onboarding_status, onboarding_started_at FROM accounts WHERE id = 'legacy-account'").get()).toEqual({ onboarding_status: 'NEW', onboarding_started_at: null }); expect(db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get()).toEqual({ version: 7 });
     } finally { db.close(); rmSync(root, { recursive: true, force: true }); }
   });
 

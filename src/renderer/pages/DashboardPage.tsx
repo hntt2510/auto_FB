@@ -63,6 +63,10 @@ export function DashboardPage({
       "operator review required",
     ],
     ["Onboarding tasks", summary.onboarding.todayTasks, "manual checklist today"],
+    ["Sessions today", summary.accountSessions.sessionsToday, "operator-controlled"],
+    ["Active sessions", summary.accountSessions.activeNow, "timers running now"],
+    ["Session minutes", summary.accountSessions.minutesToday, "recorded today"],
+    ["Daily targets", summary.accountSessions.dailyTargetsCompleted, "completed today"],
   ];
   return (
     <main className="content">
@@ -114,7 +118,7 @@ export function DashboardPage({
         </section>
         <section className="panel">
           <div className="panel-heading"><h3>Account onboarding</h3><button className="action-button" onClick={() => onNavigate?.("onboarding")}>Open planner</button></div>
-          <div className="status-summary"><span>NEW <strong>{summary.onboarding.new}</strong></span><span>WARMING <strong>{summary.onboarding.warming}</strong></span><span>READY <strong>{summary.onboarding.ready}</strong></span><span>PAUSED <strong>{summary.onboarding.paused}</strong></span></div>
+          <div className="status-summary"><span>NEW <strong>{summary.onboarding.new}</strong></span><span>WARMING <strong>{summary.onboarding.warming}</strong></span><span>READY <strong>{summary.onboarding.ready}</strong></span><span>PAUSED <strong>{summary.onboarding.paused}</strong></span><span>MANUAL ACTION <strong>{summary.accountSessions.requiringManualAction}</strong></span></div>
         </section>
         <section className="panel">
           <div className="panel-heading">

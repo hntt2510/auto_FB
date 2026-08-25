@@ -25,6 +25,7 @@ export class BrowserManager {
   private readonly operations = new Map<string, Promise<void>>();
   private readonly launchPersistentContext: PersistentContextLauncher;
   private shuttingDown = false;
+  private contextCloseObserver?: (accountId: string) => void | Promise<void>;
 
   constructor(
     private readonly accounts: AccountRepository,
@@ -40,6 +41,7 @@ export class BrowserManager {
 
   isRunning(accountId: string): boolean { return this.contexts.has(accountId) || this.locks.isLocked(accountId); }
   getRuntimeState(accountId: string): AccountStatus { return this.contexts.get(accountId) ? 'RUNNING' : (this.accounts.get(accountId)?.status ?? 'STOPPED'); }
+  setContextCloseObserver(observer: (accountId: string) => void | Promise<void>): void { this.contextCloseObserver = observer; }
 
   async openAccount(accountId: string): Promise<FacebookAccount> {
     return this.enqueue(accountId, () => this.openAccountInternal(accountId));
@@ -77,6 +79,25 @@ export class BrowserManager {
 
   async navigateAccountPage(accountId: string, url: string): Promise<{ accountId: string; status: 'OPENED' | 'LOGIN_REQUIRED' | 'CHECKPOINT' | 'ERROR'; reason?: string }> {
     return this.enqueue(accountId, () => this.navigateAccountPageInternal(accountId, url));
+  }
+
+  async navigateSessionPage(accountId: string, destination: 'HOME' | 'NOTIFICATIONS' | 'URL', requestedUrl?: string): Promise<{ accountId: string; status: 'OPENED' | 'LOGIN_REQUIRED' | 'CHECKPOINT' | 'ERROR'; reason?: string }> {
+    return this.enqueue(accountId, async () => {
+      if (this.shuttingDown) throw new AppError('BROWSER_LAUNCH_FAILED', 'Browser manager is shutting down.');
+      const entry = this.contexts.get(accountId); if (!entry) throw new AppError('ACCOUNT_SESSION_INVALID_STATE', 'Start the account session before using navigation shortcuts.');
+      const target = destination === 'HOME' ? this.facebookHomeUrl : destination === 'NOTIFICATIONS' ? new URL('/notifications', this.facebookHomeUrl).toString() : validateFacebookOperatorUrl(requestedUrl);
+      const page = await this.getPage(entry.context);
+      try {
+        await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 45000 });
+        const classification = await this.health.classify(page);
+        if (classification.status !== 'READY') { this.accounts.setHealth(accountId, classification.status, new Date().toISOString(), classification.reason); this.notifySafely(); return { accountId, status: classification.status, reason: classification.reason }; }
+        return { accountId, status: 'OPENED' };
+      } catch (error) {
+        const account = this.requireAccount(accountId);
+        if (account.proxyEnabled && this.isProxyError(error)) { const proxyError = this.proxyLaunchError(error); this.accounts.setProxyTest(accountId, { success: false, errorCode: proxyError.code as 'PROXY_AUTH_FAILED' | 'PROXY_CONNECTION_FAILED' | 'PROXY_TIMEOUT' | 'PROXY_DNS_FAILED' | 'PROXY_UNSUPPORTED', message: proxyError.message, testedAt: new Date().toISOString() }); this.notifySafely(); return { accountId, status: 'ERROR', reason: proxyError.message }; }
+        const reason = sanitizeMessage(error instanceof Error ? error.message : 'Facebook navigation failed.'); this.accounts.setHealth(accountId, 'ERROR', new Date().toISOString(), reason); this.notifySafely(); return { accountId, status: 'ERROR', reason };
+      }
+    });
   }
 
   async withAccountPage<T>(accountId: string, operation: (page: Page) => Promise<T>): Promise<T> {
@@ -237,6 +258,7 @@ export class BrowserManager {
       if (account && !entry.startupFailure) {
         try { this.accounts.setStatus(accountId, 'STOPPED'); } catch { /* best-effort status persistence during shutdown */ }
         if (writeAudit) this.auditSafely({ accountId, eventType: 'BROWSER_CLOSED', message: 'Persistent browser closed.' });
+        try { await this.contextCloseObserver?.(accountId); } catch { /* session cleanup is best effort during browser teardown */ }
       }
     } finally {
       this.notifySafely();
@@ -297,4 +319,10 @@ export class BrowserManager {
     } as const)[code];
     return new AppError(code === 'PROXY_TEST_FAILED' ? 'PROXY_CONNECTION_FAILED' : code, message);
   }
+}
+
+function validateFacebookOperatorUrl(value?: string): string {
+  if (!value) throw new AppError('INVALID_REQUEST', 'A Facebook URL is required.');
+  try { const url = new URL(value); if (!['http:', 'https:'].includes(url.protocol) || !['facebook.com', 'www.facebook.com'].includes(url.hostname.toLowerCase()) || url.username || url.password || url.port) throw new Error('invalid'); url.protocol = 'https:'; url.hostname = 'www.facebook.com'; return url.toString(); }
+  catch { throw new AppError('INVALID_REQUEST', 'Only standard facebook.com URLs are allowed.'); }
 }

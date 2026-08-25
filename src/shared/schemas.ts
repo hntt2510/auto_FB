@@ -111,6 +111,14 @@ export const onboardingPauseSchema = z.object({ accountId: accountIdSchema, reas
 export const onboardingNotesSchema = z.object({ accountId: accountIdSchema, notes: z.string().max(4000) });
 export const onboardingTaskUpdateSchema = z.object({ taskId: accountIdSchema, title: z.string().trim().min(1).max(160), description: z.string().max(4000), groupId: groupIdSchema.optional() });
 export const onboardingTaskStatusSchema = z.object({ taskId: accountIdSchema, status: z.enum(['PENDING', 'DONE', 'SKIPPED']), note: z.string().max(1000).optional() });
+export const accountSessionSettingsSchema = z.object({ targetDurationMinutes: z.number().int().min(10).max(60) });
+export const accountSessionStartSchema = z.object({ accountId: accountIdSchema, targetDurationMinutes: z.number().int().min(10).max(60).optional() });
+export const accountSessionEndSchema = z.object({ accountId: accountIdSchema, operatorNote: z.string().max(2000).optional() });
+export const accountSessionNavigationSchema = z.object({ accountId: accountIdSchema, destination: z.enum(['HOME', 'NOTIFICATIONS', 'URL']), url: z.string().trim().url().max(2048).optional() }).superRefine((value, ctx) => {
+  if (value.destination === 'URL' && !value.url) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['url'], message: 'A Facebook URL is required.' });
+  if (value.url) { try { const url = new URL(value.url); if (!['facebook.com', 'www.facebook.com'].includes(url.hostname.toLowerCase()) || !['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.port) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['url'], message: 'Only standard facebook.com URLs are allowed.' }); } catch { ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['url'], message: 'Invalid Facebook URL.' }); } }
+});
+export const accountSessionGroupSchema = z.object({ accountId: accountIdSchema, groupId: groupIdSchema });
 
 export type CreateAccountData = z.infer<typeof createAccountSchema>;
 export type UpdateAccountData = z.infer<typeof updateAccountSchema>;

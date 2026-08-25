@@ -136,8 +136,9 @@ export class AccountService {
 
   async open(accountId: string): Promise<FacebookAccount> { const id = this.validId(accountId); return publicAccount(await this.browser.openAccount(id)); }
   async close(accountId: string): Promise<FacebookAccount> { const id = this.validId(accountId); return publicAccount(await this.browser.closeAccount(id)); }
-  async healthCheck(accountId: string): Promise<HealthCheckResult> { const result = await this.browser.healthCheck(this.validId(accountId)); this.healthObserver?.(result); return result; }
+  async healthCheck(accountId: string): Promise<HealthCheckResult> { const result = await this.browser.healthCheck(this.validId(accountId)); this.reportHealthResult(result); return result; }
   setHealthObserver(observer: (result: HealthCheckResult) => void): void { this.healthObserver = observer; }
+  reportHealthResult(result: HealthCheckResult): void { this.healthObserver?.(result); }
 
   previewProxyImport(text: string): ProxyImportPreview { const parsed = proxyImportSchema.safeParse({ text }); if (!parsed.success) throw new AppError('INVALID_REQUEST', 'Proxy import text is too large or invalid.'); return previewProxyImport(parsed.data.text); }
 

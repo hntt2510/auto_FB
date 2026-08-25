@@ -1,9 +1,10 @@
 import { BrowserWindow } from 'electron';
 import type { OnboardingService } from '@main/services/OnboardingService';
-import { accountIdSchema, onboardingNotesSchema, onboardingPauseSchema, onboardingStartSchema, onboardingTaskStatusSchema, onboardingTaskUpdateSchema } from '@shared/schemas';
+import type { AccountSessionService } from '@main/services/AccountSessionService';
+import { accountIdSchema, accountSessionEndSchema, accountSessionGroupSchema, accountSessionNavigationSchema, accountSessionSettingsSchema, accountSessionStartSchema, onboardingNotesSchema, onboardingPauseSchema, onboardingStartSchema, onboardingTaskStatusSchema, onboardingTaskUpdateSchema } from '@shared/schemas';
 import { parseOrThrow, registerAuthorizedHandler } from './authorized';
 
-export function registerOnboardingIpc(service: OnboardingService, allowedSenderIds: () => ReadonlySet<number>): () => void {
+export function registerOnboardingIpc(service: OnboardingService, sessions: AccountSessionService, allowedSenderIds: () => ReadonlySet<number>): () => void {
   const cleanups = [
     registerAuthorizedHandler('onboarding:templates', allowedSenderIds, () => service.templates()),
     registerAuthorizedHandler('onboarding:overview', allowedSenderIds, () => service.overview()),
@@ -16,7 +17,16 @@ export function registerOnboardingIpc(service: OnboardingService, allowedSenderI
     registerAuthorizedHandler('onboarding:update-task', allowedSenderIds, (_event, input: unknown) => service.updateTask(parseOrThrow(onboardingTaskUpdateSchema.safeParse(input)))),
     registerAuthorizedHandler('onboarding:task-status', allowedSenderIds, (_event, input: unknown) => service.setTaskStatus(parseOrThrow(onboardingTaskStatusSchema.safeParse(input)))),
     registerAuthorizedHandler('onboarding:start-session', allowedSenderIds, (_event, accountId: unknown) => service.startSession(parseOrThrow(accountIdSchema.safeParse(accountId)))),
-    registerAuthorizedHandler('onboarding:stop-session', allowedSenderIds, (_event, accountId: unknown) => service.stopSession(parseOrThrow(accountIdSchema.safeParse(accountId))))
+    registerAuthorizedHandler('onboarding:stop-session', allowedSenderIds, (_event, accountId: unknown) => service.stopSession(parseOrThrow(accountIdSchema.safeParse(accountId)))),
+    registerAuthorizedHandler('onboarding:session-detail', allowedSenderIds, (_event, accountId: unknown) => sessions.detail(parseOrThrow(accountIdSchema.safeParse(accountId)))),
+    registerAuthorizedHandler('onboarding:start-assisted-session', allowedSenderIds, (_event, input: unknown) => sessions.start(parseOrThrow(accountSessionStartSchema.safeParse(input)))),
+    registerAuthorizedHandler('onboarding:pause-assisted-session', allowedSenderIds, (_event, accountId: unknown) => sessions.pause(parseOrThrow(accountIdSchema.safeParse(accountId)))),
+    registerAuthorizedHandler('onboarding:resume-assisted-session', allowedSenderIds, (_event, accountId: unknown) => sessions.resume(parseOrThrow(accountIdSchema.safeParse(accountId)))),
+    registerAuthorizedHandler('onboarding:end-assisted-session', allowedSenderIds, (_event, input: unknown) => sessions.end(parseOrThrow(accountSessionEndSchema.safeParse(input)))),
+    registerAuthorizedHandler('onboarding:navigate-session', allowedSenderIds, (_event, input: unknown) => sessions.navigate(parseOrThrow(accountSessionNavigationSchema.safeParse(input)))),
+    registerAuthorizedHandler('onboarding:open-session-group', allowedSenderIds, (_event, input: unknown) => { const data = parseOrThrow(accountSessionGroupSchema.safeParse(input)); return sessions.openGroup(data.accountId, data.groupId); }),
+    registerAuthorizedHandler('onboarding:update-session-settings', allowedSenderIds, (_event, input: unknown) => sessions.updateSettings(parseOrThrow(accountSessionSettingsSchema.safeParse(input)))),
+    registerAuthorizedHandler('onboarding:stop-all-sessions', allowedSenderIds, () => sessions.stopAll())
   ];
   return () => cleanups.forEach((cleanup) => cleanup());
 }

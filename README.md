@@ -107,6 +107,12 @@ Publishing has two independent controls: the engine switch and **Execution mode*
 
 `SUBMITTED` means Facebook accepted the submission interaction but this application did not verify public publication. `SUCCEEDED` requires a newly observed, current-group-correlated post link plus acceptance and matching content evidence. Existing post links are captured before submission and cannot be reused as proof. Ambiguous results become `NEEDS_ATTENTION`; they are never automatically retried.
 
+### Controlled batch publishing
+
+Canary Mode stays enabled by default and permits one explicit LIVE item only. To run a controlled batch, an operator must explicitly turn Canary Mode **OFF**, select no more than 20 ready queue items, review the batch confirmation, and keep a fresh matching PASSED preflight for every selected item. A controlled batch preserves selected order within each account and applies a fixed per-account cooldown of **120 seconds** by default (configurable from 10 to 3600 seconds). Independent accounts may run concurrently within the configured account limit. Pacing reduces burstiness but does not guarantee Facebook acceptance or avoid platform restrictions.
+
+Only verified `SUCCEEDED` work allows the next selected item for that account. Failures, checkpoint/login states, `SUBMITTED`, and `NEEDS_ATTENTION` stop that account's remaining chain for operator review. Stop Publishing and Stop After Current cancel pending cooldowns immediately; neither action bypasses account, proxy, health, preflight, or reconciliation safeguards.
+
 Terminal publishing changes are committed atomically with the receipt, attempt status, queue state, lease cleanup, timestamps, and terminal event. On restart, stale executions become `NEEDS_ATTENTION` with different guidance for interruption before or after the submit boundary. Operators can open the group, mark an item submitted, manually mark it verified with retained operator evidence, requeue it as a new snapshot, or retry only after acknowledging duplicate risk. Historical `SUBMITTED` items no longer block source deletion or active duplicate creation.
 
 Selector probes record the account, group, selector version, field-level `FOUND`/`MISSING`/`AMBIGUOUS` state, warnings, and timestamp. Diagnostics remain local, confined to the managed diagnostics root, bounded by retention, and can be deleted from attempt detail. No credentials, cookies, tokens, page HTML, or media contents are stored in probes, attempts, receipts, or audit logs.

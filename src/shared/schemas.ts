@@ -92,7 +92,7 @@ export const publishRunSelectedSchema = z.object({ queueIds: z.array(queueIdSche
 export const publishRetrySchema = z.object({ queueId: queueIdSchema, acknowledgeDuplicateRisk: z.boolean() });
 export const publishRequeueSchema = z.object({ queueId: queueIdSchema, scheduledAt: z.string().datetime().refine((value) => value.endsWith('Z'), 'Schedule must be UTC.').optional() });
 export const publishMarkVerifiedSchema = z.object({ queueId: queueIdSchema, evidence: z.string().trim().min(1).max(500).optional() });
-export const publishingSettingsSchema = z.object({ enabled: z.boolean(), executionMode: z.enum(['DRY_RUN', 'LIVE']), schedulerIntervalSeconds: z.number().int().min(15).max(300), maxConcurrentAccounts: z.number().int().min(1).max(3), videoUploadTimeoutSeconds: z.number().int().min(60).max(1800), maxJobsPerSchedulerSession: z.number().int().min(1).max(100).default(20), canaryMode: z.boolean().default(true), requireReadyAccounts: z.boolean().default(false) });
+export const publishingSettingsSchema = z.object({ enabled: z.boolean(), executionMode: z.enum(['DRY_RUN', 'LIVE']), schedulerIntervalSeconds: z.number().int().min(15).max(300), maxConcurrentAccounts: z.number().int().min(1).max(3), videoUploadTimeoutSeconds: z.number().int().min(60).max(1800), maxJobsPerSchedulerSession: z.number().int().min(1).max(100).default(20), batchPacingSeconds: z.number().int().min(10).max(3600).default(120), canaryMode: z.boolean().default(true), requireReadyAccounts: z.boolean().default(false) });
 export const publishingSettingsUpdateSchema = publishingSettingsSchema.extend({ confirmLive: z.boolean().optional() });
 export const schedulerArmSchema = z.object({ acknowledgeOverdue: z.boolean().optional() }).default({});
 export const proxyTestSchema = z.object({ accountId: accountIdSchema.optional(), ...proxyFields }).superRefine((data, ctx) => { if (!data.accountId) validateCredentials(data, ctx); if (data.proxyPassword && !data.proxyUsername) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['proxyUsername'], message: 'Proxy username is required with a password' }); });
@@ -122,31 +122,3 @@ export const accountSessionGroupSchema = z.object({ accountId: accountIdSchema, 
 
 export type CreateAccountData = z.infer<typeof createAccountSchema>;
 export type UpdateAccountData = z.infer<typeof updateAccountSchema>;
-
-// ─── Automated Account Warm-up Engine ──────────────────────────────────────
-
-export const warmupConfigSchema = z.object({
-  durationMinutes: z.number().int().min(5).max(120).default(15),
-  enableLikes: z.boolean().default(false),
-  enableComments: z.boolean().default(false),
-  enableReels: z.boolean().default(true),
-  headless: z.boolean().default(false),
-});
-
-export const warmupStartSchema = z.object({
-  accountId: accountIdSchema,
-  config: warmupConfigSchema.partial().optional(),
-});
-
-export const warmupAccountIdSchema = z.object({ accountId: accountIdSchema });
-
-export const warmupConfigUpdateSchema = z.object({
-  accountId: accountIdSchema,
-  config: warmupConfigSchema.partial(),
-});
-
-export const warmupListLogsSchema = z.object({
-  accountId: accountIdSchema,
-  runId: z.string().uuid().optional(),
-  limit: z.number().int().min(1).max(500).default(100),
-});

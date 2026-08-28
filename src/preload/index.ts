@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AboutInfo, AccountApi, AccountOnboarding, AccountOperationsSummary, AccountSessionDetail, AccountSessionEndInput, AccountSessionNavigationInput, AccountSessionNavigationResult, AccountSessionSettings, AccountSessionStartInput, AssignmentAccount, AssignmentMatrix, AuditLog, BackupInfo, CreateAccountInput, DashboardApi, DashboardSummary, DeleteAccountInput, Draft, DraftApi, DraftFilter, DraftInput, DraftMedia, DraftStatus, FacebookAccount, FacebookGroup, GroupApi, GroupFilter, GroupImportPreview, GroupImportResult, GroupInput, GroupOpenResult, GroupOperationsSummary, HealthCheckResult, LiveReadiness, LogApi, LogFilter, ManualSession, MediaReorderInput, OnboardingApi, OnboardingOverview, OnboardingPlanTemplate, OnboardingStartInput, OnboardingTaskStatusInput, OnboardingTaskUpdateInput, OperationsApi, OrphanMediaScan, PlannerSummary, PreflightResult, ProxyImportPreview, ProxyTestInput, ProxyTestResult, PublishApi, PublishAttempt, PublishHistoryFilter, PublishingEngineStatus, PublishingHistoryRow, PublishingRunResult, PublishingSettings, PublishingSettingsApi, PublishingSettingsUpdate, QueueApi, QueueBatchActionInput, QueueBatchInput, QueueBatchRescheduleInput, QueueFilter, QueueItem, QueueOptions, QueuePreview, ReconciliationRecord, RequeueInput, SelectorProbeResult, StorageUsage, UpdateAccountInput, WarmUpTask } from '@shared/types';
+import type { AboutInfo, AccountApi, AccountOnboarding, AccountOperationsSummary, AccountSessionDetail, AccountSessionEndInput, AccountSessionNavigationInput, AccountSessionNavigationResult, AccountSessionSettings, AccountSessionStartInput, AssignmentAccount, AssignmentMatrix, AuditLog, BackupInfo, CreateAccountInput, DashboardApi, DashboardSummary, DeleteAccountInput, Draft, DraftApi, DraftFilter, DraftInput, DraftMedia, DraftStatus, FacebookAccount, FacebookGroup, GroupApi, GroupFilter, GroupImportPreview, GroupImportResult, GroupInput, GroupOpenResult, GroupOperationsSummary, HealthCheckResult, LiveReadiness, LogApi, LogFilter, ManualSession, MediaReorderInput, OnboardingApi, OnboardingOverview, OnboardingPlanTemplate, OnboardingStartInput, OnboardingTaskStatusInput, OnboardingTaskUpdateInput, OperationsApi, OrphanMediaScan, PlannerSummary, PreflightResult, ProxyImportPreview, ProxyTestInput, ProxyTestResult, PublishApi, PublishAttempt, PublishBatchPreview, PublishHistoryFilter, PublishingEngineStatus, PublishingHistoryRow, PublishingRunResult, PublishingSettings, PublishingSettingsApi, PublishingSettingsUpdate, QueueApi, QueueBatchActionInput, QueueBatchInput, QueueBatchRescheduleInput, QueueFilter, QueueItem, QueueOptions, QueuePreview, ReconciliationRecord, RequeueInput, SelectorProbeResult, StorageUsage, UpdateAccountInput, WarmUpTask } from '@shared/types';
 
 type IpcResponse<T> = { ok: true; data: T } | { ok: false; error: { code: string; message: string } };
 
@@ -96,6 +96,7 @@ const publishApi: PublishApi = {
   status: () => invoke<PublishingEngineStatus>('publishing:status'),
   run: (queueId: string) => invoke<PublishingRunResult>('publishing:run', queueId),
   runSelected: (queueIds: string[]) => invoke<PublishingRunResult>('publishing:run-selected', { queueIds }),
+  previewBatch: (queueIds: string[]) => invoke<PublishBatchPreview>('publishing:preview-batch', { queueIds }),
   runDue: () => invoke<PublishingRunResult>('publishing:run-due'),
   attempts: (queueId: string) => invoke<PublishAttempt[]>('publishing:attempts', queueId),
   retry: (queueId: string, acknowledgeDuplicateRisk: boolean) => invoke<QueueItem>('publishing:retry', { queueId, acknowledgeDuplicateRisk }),
@@ -136,24 +137,6 @@ const operationsApi: OperationsApi = {
   about: () => invoke<AboutInfo>('operations:about')
 };
 
-import type { WarmupApi, WarmupConfig, WarmupExecutionLog, WarmupListLogsInput, WarmupProgress, WarmupStartInput } from '@shared/types';
-
-const warmupApi: WarmupApi = {
-  getProgress: (accountId: string) => invoke<WarmupProgress | null>('warmup:get-progress', accountId),
-  listAll: () => invoke<WarmupProgress[]>('warmup:list-all'),
-  start: (input: WarmupStartInput) => invoke<WarmupProgress>('warmup:start', input),
-  stop: (accountId: string) => invoke<WarmupProgress>('warmup:stop', accountId),
-  pause: (accountId: string) => invoke<WarmupProgress>('warmup:pause', accountId),
-  resume: (accountId: string) => invoke<WarmupProgress>('warmup:resume', accountId),
-  updateConfig: (accountId: string, config: Partial<WarmupConfig>) => invoke<WarmupProgress>('warmup:update-config', { accountId, config }),
-  getLogs: (input: WarmupListLogsInput) => invoke<WarmupExecutionLog[]>('warmup:get-logs', input),
-  onChanged: (listener: () => void) => {
-    const callback = () => listener();
-    ipcRenderer.on('warmup:changed', callback);
-    return () => ipcRenderer.removeListener('warmup:changed', callback);
-  }
-};
-
 contextBridge.exposeInMainWorld('accountApi', accountApi);
 contextBridge.exposeInMainWorld('appBridge', { available: true, version: '1' });
 contextBridge.exposeInMainWorld('logApi', logApi);
@@ -165,4 +148,3 @@ contextBridge.exposeInMainWorld('onboardingApi', onboardingApi);
 contextBridge.exposeInMainWorld('publishApi', publishApi);
 contextBridge.exposeInMainWorld('settingsApi', settingsApi);
 contextBridge.exposeInMainWorld('operationsApi', operationsApi);
-contextBridge.exposeInMainWorld('warmupApi', warmupApi);

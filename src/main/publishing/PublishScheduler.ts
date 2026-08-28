@@ -46,7 +46,8 @@ export class PublishScheduler {
   async runDue(): Promise<PublishingRunResult> {
     const settings = this.settings.get(); const limit = Math.max(0, (settings.maxJobsPerSchedulerSession ?? 20) - this.sessionCompleted); const allDue = this.queue.due(new Date().toISOString()); const eligible = settings.requireReadyAccounts ? allDue.filter((item) => Boolean(item.accountId && this.accountReady(item.accountId))) : allDue;
     if (this.state !== 'ARMED' || settings.canaryMode !== false || settings.executionMode !== 'LIVE' || !settings.enabled || limit === 0) return { requested: allDue.length, claimed: 0, completed: 0, skipped: allDue.length };
-    const selected = eligible.slice(0, limit).map((item) => item.id); const result = await this.coordinator.run(selected, settings); this.recordCompleted(result.completed);
+    if (this.coordinator.isBusy()) return { requested: allDue.length, claimed: 0, completed: 0, skipped: allDue.length };
+    const selected = eligible.slice(0, limit).map((item) => item.id); const result = await this.coordinator.run(selected, settings, 'SCHEDULER'); this.recordCompleted(result.completed);
     return { ...result, requested: allDue.length, skipped: result.skipped + Math.max(0, allDue.length - selected.length) };
   }
 

@@ -5,6 +5,7 @@ export function ActionDialog({
   message,
   confirmLabel,
   danger = false,
+  confirmDisabled = false,
   children,
   onCancel,
   onConfirm,
@@ -13,6 +14,7 @@ export function ActionDialog({
   message: string;
   confirmLabel: string;
   danger?: boolean;
+  confirmDisabled?: boolean;
   children?: ReactNode;
   onCancel: () => void;
   onConfirm: () => Promise<void> | void;
@@ -45,7 +47,7 @@ export function ActionDialog({
           </button>
           <button
             className={danger ? "danger" : "primary"}
-            disabled={busy}
+            disabled={busy || confirmDisabled}
             onClick={() => void confirm()}
           >
             {busy ? "Working…" : confirmLabel}

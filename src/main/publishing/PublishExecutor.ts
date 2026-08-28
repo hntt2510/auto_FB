@@ -7,13 +7,13 @@ import type { BrowserManager } from '@main/browser/BrowserManager';
 import type { ProfileManager } from '@main/browser/ProfileManager';
 import { AppError, sanitizeMessage } from '@main/errors';
 import { normalizeFacebookGroupUrl } from '@shared/groupUrl';
-import type { PreflightResult, PublishAttemptStatus, PublishingSettings, SelectorProbeResult } from '@shared/types';
+import type { PreflightResult, PublishAttemptStatus, PublishingSettings, QueueStatus, SelectorProbeResult } from '@shared/types';
 import { FacebookPublisher, type PublishMilestone } from './FacebookPublisher';
 import { PublishingError } from './PublishingError';
 import { PublishDiagnostics } from './PublishDiagnostics';
 import type { LiveReadinessService } from './LiveReadinessService';
 
-export type ExecutionOutcome = 'COMPLETED' | 'SKIPPED';
+export type ExecutionOutcome = { started: boolean; finalStatus?: QueueStatus };
 
 export class PublishExecutor {
   constructor(private readonly queue: QueueRepository, private readonly attempts: PublishRepository, private readonly accounts: AccountRepository, private readonly groups: GroupRepository, private readonly profiles: ProfileManager, private readonly browser: BrowserManager, private readonly publisher: FacebookPublisher, private readonly diagnostics: PublishDiagnostics, private readonly audit: AuditLogRepository, private readonly notify: () => void, private readonly readiness?: LiveReadinessService) {}
@@ -21,15 +21,15 @@ export class PublishExecutor {
   get selectorVersion(): string { return this.publisher.selectorsVersion; }
 
   async execute(queueItemId: string, settings: PublishingSettings, signal?: AbortSignal): Promise<ExecutionOutcome> {
-    const before = this.queue.get(queueItemId); if (!before || before.status !== 'PENDING' || !before.accountId || settings.executionMode !== 'LIVE') return 'SKIPPED';
+    const before = this.queue.get(queueItemId); if (!before || before.status !== 'PENDING' || !before.accountId || settings.executionMode !== 'LIVE') return { started: false };
     if (settings.canaryMode === true && !this.readiness) throw new AppError('LIVE_READINESS_FAILED', 'Live canary readiness is unavailable. Run a fresh preflight first.');
     if (settings.canaryMode === true && this.readiness) {
       this.readiness.setSelectorVersion(this.publisher.selectorsVersion);
       const live = await this.readiness.evaluate(before, settings);
       if (!live.ready) throw new AppError('LIVE_READINESS_FAILED', 'Live canary is not ready: ' + live.reasons.join(', ') + '.');
     }
-    if (this.attempts.isBlocked(before.accountId)) return 'SKIPPED';
-    const claim = this.attempts.claim(queueItemId, { executionMode: settings.executionMode, selectorVersion: this.publisher.selectorsVersion }); if (!claim) return 'SKIPPED';
+    if (this.attempts.isBlocked(before.accountId)) return { started: false };
+    const claim = this.attempts.claim(queueItemId, { executionMode: settings.executionMode, selectorVersion: this.publisher.selectorsVersion }); if (!claim) return { started: false };
     const { token, attempt } = claim; const item = this.queue.get(queueItemId)!; let finalized = false;
     this.auditSafe(item.accountId, 'PUBLISH_STARTED', 'Publishing attempt claimed.', item.id);
     try {
@@ -49,9 +49,9 @@ export class PublishExecutor {
       else if (result.result === 'VERIFIED_PUBLISHED') { this.attempts.finalizeUnknown(item.id, token, attempt.id, item.groupUrl, 'Facebook reported success without an observed post URL.'); finalized = true; this.auditSafe(account.id, 'PUBLISH_NEEDS_ATTENTION', 'Facebook reported success without a verifiable post URL.', item.id); }
       else if (result.result === 'UNKNOWN') { this.attempts.finalizeUnknown(item.id, token, attempt.id, item.groupUrl, result.evidence); finalized = true; this.auditSafe(account.id, 'PUBLISH_NEEDS_ATTENTION', 'Facebook submission result requires manual review.', item.id); }
       else { this.attempts.finalizeSubmission(item.id, token, attempt.id, item.groupUrl, result.result, result.evidence); finalized = true; this.auditSafe(account.id, 'PUBLISH_SUBMITTED', result.result === 'SUBMITTED_PENDING_APPROVAL' ? 'Facebook submission is pending group approval.' : 'Facebook accepted the submission interaction.', item.id); }
-      return 'COMPLETED';
+      return { started: true, finalStatus: this.queue.get(item.id)?.status };
     } catch (error) {
-      if (finalized) return 'COMPLETED';
+      if (finalized) return { started: true, finalStatus: this.queue.get(item.id)?.status };
       const publishing = error instanceof PublishingError ? error : new PublishingError('BROWSER_CLOSED', 'Publishing stopped unexpectedly.', this.irreversible(attempt.id));
       const message = sanitizeMessage(publishing.message); const security = publishing.code === 'ACCOUNT_LOGIN_REQUIRED' || publishing.code === 'ACCOUNT_CHECKPOINT'; const ambiguous = publishing.afterSubmit || this.irreversible(attempt.id) || security || publishing.code === 'GROUP_UNAVAILABLE' || publishing.code === 'MEDIA_FILE_MISSING';
       if (item.accountId && publishing.code === 'NETWORK_ERROR' && this.accounts.get(item.accountId)?.proxyEnabled) {
@@ -60,7 +60,7 @@ export class PublishExecutor {
       if (item.accountId && security) { const health = publishing.code === 'ACCOUNT_LOGIN_REQUIRED' ? 'LOGIN_REQUIRED' : 'CHECKPOINT'; this.accounts.setHealth(item.accountId, health, new Date().toISOString(), message); this.attempts.blockAccount(item.accountId, item.accountName, health, message); this.auditSafe(item.accountId, 'ACCOUNT_PUBLISHING_PAUSED', message, item.id); }
       if (ambiguous) { const receipt = publishing.afterSubmit || this.irreversible(attempt.id) ? { result: 'UNKNOWN' as const, groupUrl: item.groupUrl, evidence: message } : undefined; this.attempts.finalizeNeedsAttention(item.id, token, attempt.id, message, receipt); finalized = true; this.auditSafe(item.accountId, 'PUBLISH_NEEDS_ATTENTION', message, item.id); }
       else { this.attempts.finalizeFailure(item.id, token, attempt.id, publishing.code, message); finalized = true; this.auditSafe(item.accountId, 'PUBLISH_FAILED', message, item.id); }
-      return 'COMPLETED';
+      return { started: true, finalStatus: this.queue.get(item.id)?.status };
     } finally { this.notifySafe(); }
   }
 
@@ -75,7 +75,7 @@ export class PublishExecutor {
     this.attempts.recordPreflight(preflight); this.notifySafe(); return preflight;
   }
 
-  async probe(item: QueueRecord): Promise<SelectorProbeResult> { const result = await this.preflight(item, { enabled: false, executionMode: 'DRY_RUN', schedulerIntervalSeconds: 30, maxConcurrentAccounts: 1, videoUploadTimeoutSeconds: 60, maxJobsPerSchedulerSession: 20 }, false); return result; }
+  async probe(item: QueueRecord): Promise<SelectorProbeResult> { const result = await this.preflight(item, { enabled: false, executionMode: 'DRY_RUN', schedulerIntervalSeconds: 30, maxConcurrentAccounts: 1, videoUploadTimeoutSeconds: 60, maxJobsPerSchedulerSession: 20, batchPacingSeconds: 120 }, false); return result; }
 
   private recordMilestone(attemptId: string, event: PublishMilestone, detail?: string): void { this.attempts.addEvent(attemptId, event, detail); const status: Partial<Record<PublishMilestone, PublishAttemptStatus>> = { COMPOSER_OPENED: 'COMPOSER_OPENED', CONTENT_FILLED: 'CONTENT_FILLED', MEDIA_UPLOADED: 'MEDIA_UPLOADED', SUBMITTING: 'SUBMITTING' }; if (status[event]) this.attempts.setAttemptStatus(attemptId, status[event]!); }
   private irreversible(attemptId: string): boolean { return this.attempts.getAttempt(attemptId)?.irreversibleReached ?? false; }

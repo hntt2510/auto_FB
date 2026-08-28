@@ -123,6 +123,7 @@ try {
       maxConcurrentAccounts: 2,
       videoUploadTimeoutSeconds: 600,
       maxJobsPerSchedulerSession: 3,
+      batchPacingSeconds: 10,
       canaryMode: false,
       confirmLive: true,
     }),
@@ -148,6 +149,7 @@ try {
       maxConcurrentAccounts: 2,
       videoUploadTimeoutSeconds: 600,
       maxJobsPerSchedulerSession: 3,
+      batchPacingSeconds: 10,
       canaryMode: true,
       requireReadyAccounts: true,
     }),
@@ -227,6 +229,14 @@ try {
     });
     return { accountId: account.id, checkpointAccountId: checkpointAccount.id, groupId: group.id };
   });
+  const canaryBatchError = await page.evaluate(async () => {
+    const queue = await window.queueApi.list({});
+    await window.settingsApi.updatePublishing({ enabled: true, executionMode: "LIVE", schedulerIntervalSeconds: 30, maxConcurrentAccounts: 2, videoUploadTimeoutSeconds: 600, maxJobsPerSchedulerSession: 3, batchPacingSeconds: 10, canaryMode: true, confirmLive: true });
+    try { await window.publishApi.runSelected(queue.slice(0, 2).map((item) => item.id)); return "NO_ERROR"; }
+    catch (error) { return { code: error?.code, message: error instanceof Error ? error.message : String(error) }; }
+  });
+  assert(canaryBatchError.message.includes("Canary mode allows one queue item"), `Canary batch guard failed: ${JSON.stringify(canaryBatchError)}`);
+  await page.evaluate(() => window.settingsApi.updatePublishing({ enabled: false, executionMode: "DRY_RUN", schedulerIntervalSeconds: 30, maxConcurrentAccounts: 2, videoUploadTimeoutSeconds: 600, maxJobsPerSchedulerSession: 3, batchPacingSeconds: 10, canaryMode: true, requireReadyAccounts: true }));
   await open(page, "Account Onboarding");
   await page.locator(".onboarding-account").filter({ hasText: "QA Account" }).click();
   await page.getByRole("button", { name: "Start onboarding" }).click();
@@ -356,6 +366,7 @@ try {
     persisted.settings.maxJobsPerSchedulerSession === 3,
     "Scheduler session cap setting did not persist.",
   );
+  assert(persisted.settings.batchPacingSeconds === 10, "Batch pacing setting did not persist.");
   assert(persisted.settings.requireReadyAccounts === true, "READY scheduler gate setting did not persist.");
   assert(persisted.onboarding.account.onboardingStatus === "READY" && persisted.accountSessions.sessions.length === 2 && persisted.accountSessions.sessions[0].completionReason === "TARGET_REACHED" && persisted.accountSessions.sessions[1].completionReason === "OPERATOR_ENDED" && !persisted.accountSessions.activeSession, "Completed multi-session target did not persist safely across restart.");
   const persistedProxy = persisted.accounts.find((account) => account.name === "QA Proxy Account");
@@ -385,6 +396,7 @@ try {
         "fixed proxy parser/test/status",
         "encrypted proxy credential restart",
         "main-process target completion and checkpoint priority",
+        "canary multi-item guard and batch pacing persistence",
         "same-day accumulated progress in renderer",
         "restart persistence",
       ],

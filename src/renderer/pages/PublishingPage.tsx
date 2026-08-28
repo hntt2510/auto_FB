@@ -99,7 +99,7 @@ export function PublishingPage({
           </button>
           <button
             className="secondary"
-            disabled={status.schedulerState !== "ARMED"}
+            disabled={status.schedulerState !== "ARMED" && !["RUNNING", "COOLDOWN", "STOPPING"].includes(status.batch?.state ?? "")}
             onClick={() => setDialog("STOP_AFTER")}
           >
             Stop after current
@@ -107,7 +107,7 @@ export function PublishingPage({
           <button
             className="danger"
             disabled={
-              status.schedulerState === "DISARMED" && !status.running.length
+              status.schedulerState === "DISARMED" && !status.running.length && !["RUNNING", "COOLDOWN", "STOPPING"].includes(status.batch?.state ?? "")
             }
             onClick={() => setDialog("STOP")}
           >
@@ -175,6 +175,7 @@ export function PublishingPage({
           detail={`selectors ${status.selectorVersion}`}
         />
       </div>
+      {status.batch && <section className="panel operations-recent"><div className="panel-heading"><div><h3>Controlled batch · {status.batch.state}</h3><small>{status.batch.processed} / {status.batch.requested} processed</small></div></div>{status.batch.current && <p>Current: {status.batch.current.accountName} → {status.batch.current.groupName ?? 'group'}</p>}{status.batch.next && <p>Next: {status.batch.next.accountName} → {status.batch.next.groupName ?? 'group'}</p>}{status.batch.lanes.filter((lane) => lane.state === 'COOLDOWN').map((lane) => <p key={lane.accountId}>Cooldown: {lane.accountName} · {lane.remainingSeconds ?? 0}s remaining</p>)}</section>}
       <div className="dashboard-grid">
         <section className="panel">
           <div className="panel-heading">

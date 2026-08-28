@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 
-export const LATEST_SCHEMA_VERSION = 8;
+export const LATEST_SCHEMA_VERSION = 7;
 
 export function runMigrations(db: Database.Database): void {
   db.exec(`
@@ -11,6 +11,16 @@ export function runMigrations(db: Database.Database): void {
   `);
 
   const applied = new Set<number>((db.prepare('SELECT version FROM schema_migrations ORDER BY version').all() as { version: number }[]).map((row) => row.version));
+  // Commit 839cf21 introduced schema 8 exclusively for the reverted Warmup
+  // Engine. Remove only those isolated tables so existing local workspaces
+  // return safely to the supported schema-7 baseline without a new migration.
+  if (applied.has(8)) {
+    db.transaction(() => {
+      db.exec('DROP TABLE IF EXISTS warmup_execution_logs; DROP TABLE IF EXISTS account_warmup_progress;');
+      db.prepare('DELETE FROM schema_migrations WHERE version = 8').run();
+    })();
+    applied.delete(8);
+  }
   const migrations: Array<[number, string]> = [
     [1, `
       CREATE TABLE IF NOT EXISTS accounts (
@@ -366,35 +376,6 @@ export function runMigrations(db: Database.Database): void {
       CREATE INDEX idx_account_sessions_status_started ON account_sessions(status, started_at DESC);
       CREATE INDEX idx_account_sessions_day ON account_sessions(account_id, onboarding_day, status);
       CREATE UNIQUE INDEX idx_account_sessions_one_open ON account_sessions(account_id) WHERE status IN ('ACTIVE', 'PAUSED');
-    `],
-    [8, `
-      CREATE TABLE account_warmup_progress (
-        id TEXT PRIMARY KEY,
-        account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-        status TEXT NOT NULL DEFAULT 'IDLE' CHECK (status IN ('IDLE', 'RUNNING', 'PAUSED', 'DONE', 'ERROR')),
-        total_duration_seconds INTEGER NOT NULL DEFAULT 0 CHECK (total_duration_seconds >= 0),
-        last_run_at TEXT,
-        last_error TEXT,
-        config_json TEXT NOT NULL DEFAULT '{}',
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-      );
-      CREATE UNIQUE INDEX idx_warmup_progress_account ON account_warmup_progress(account_id);
-      CREATE INDEX idx_warmup_progress_status ON account_warmup_progress(status, last_run_at DESC);
-
-      CREATE TABLE warmup_execution_logs (
-        id TEXT PRIMARY KEY,
-        account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-        run_id TEXT NOT NULL,
-        phase TEXT NOT NULL CHECK (phase IN ('INITIALIZE', 'OPEN_WORKSPACE', 'MAIN_LOOP', 'FINISH')),
-        action TEXT NOT NULL,
-        detail TEXT,
-        duration_ms INTEGER CHECK (duration_ms IS NULL OR duration_ms >= 0),
-        ok INTEGER NOT NULL DEFAULT 1 CHECK (ok IN (0, 1)),
-        created_at TEXT NOT NULL
-      );
-      CREATE INDEX idx_warmup_logs_account_run ON warmup_execution_logs(account_id, run_id, created_at);
-      CREATE INDEX idx_warmup_logs_created ON warmup_execution_logs(created_at DESC);
     `]
   ];
 

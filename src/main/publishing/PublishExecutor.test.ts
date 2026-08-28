@@ -4,7 +4,7 @@ import type { PublishingSettings } from '@shared/types';
 import { PublishExecutor } from './PublishExecutor';
 import { PublishingError } from './PublishingError';
 
-const settings: PublishingSettings = { enabled: true, executionMode: 'LIVE', schedulerIntervalSeconds: 30, maxConcurrentAccounts: 2, videoUploadTimeoutSeconds: 600, maxJobsPerSchedulerSession: 20 };
+const settings: PublishingSettings = { enabled: true, executionMode: 'LIVE', schedulerIntervalSeconds: 30, maxConcurrentAccounts: 2, videoUploadTimeoutSeconds: 600, maxJobsPerSchedulerSession: 20, batchPacingSeconds: 120 };
 const item: QueueRecord = { id: '11111111-1111-4111-8111-111111111111', accountId: '22222222-2222-4222-8222-222222222222', groupId: '33333333-3333-4333-8333-333333333333', draftTitle: 'Snapshot', body: 'Body', accountName: 'FB01', groupName: 'Group', groupUrl: 'https://www.facebook.com/groups/test', status: 'PENDING', media: [], snapshotHash: 'hash', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
 
 function fixture(error: PublishingError) {
@@ -28,7 +28,7 @@ describe('PublishExecutor safety boundary', () => {
 
   it('never claims a queue item in dry-run mode', async () => {
     const value = fixture(new PublishingError('SUBMIT_FAILED', 'Dry run should stop before Post.')); const dryRun = { ...settings, executionMode: 'DRY_RUN' as const };
-    await expect(value.executor.execute(item.id, dryRun)).resolves.toBe('SKIPPED'); expect(value.attempts.claim).not.toHaveBeenCalled();
+    await expect(value.executor.execute(item.id, dryRun)).resolves.toEqual({ started: false }); expect(value.attempts.claim).not.toHaveBeenCalled();
   });
 
   it('moves an evidence-free post-submit result to NEEDS_ATTENTION', async () => {

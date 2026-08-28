@@ -104,6 +104,7 @@ describe("FacebookMediaUploader", () => {
             maxConcurrentAccounts: 1,
             videoUploadTimeoutSeconds: 60,
             maxJobsPerSchedulerSession: 20,
+            batchPacingSeconds: 120,
           },
           vi.fn(),
         ),

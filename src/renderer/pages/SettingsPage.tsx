@@ -137,8 +137,8 @@ export function SettingsPage({
           <span>
             <strong>Canary Mode</strong>
             <small>
-              One explicit item; scheduler and batch LIVE execution stay
-              disabled.
+              ON permits one explicit LIVE item. Turn it OFF to enable
+              controlled multi-item batches and the scheduler.
             </small>
           </span>
           <b>{value.canaryMode !== false ? "ON" : "OFF"}</b>
@@ -211,6 +211,22 @@ export function SettingsPage({
               }
             />
             <small>1–100. Default 20; auto-disarms at the cap.</small>
+          </label>
+          <label>
+            Batch pacing between posts (seconds)
+            <input
+              type="number"
+              min={10}
+              max={3600}
+              value={value.batchPacingSeconds}
+              onChange={(event) =>
+                setValue({
+                  ...value,
+                  batchPacingSeconds: Number(event.target.value),
+                })
+              }
+            />
+            <small>{value.batchPacingSeconds} sec · {(value.batchPacingSeconds / 60).toFixed(value.batchPacingSeconds % 60 ? 1 : 0)} min. Fixed cooldown between consecutive LIVE jobs on the same account. This controls workload pacing and does not guarantee platform acceptance.</small>
           </label>
           <label>
             Video readiness timeout (seconds)

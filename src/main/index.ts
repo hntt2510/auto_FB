@@ -43,10 +43,6 @@ import { OnboardingService } from './services/OnboardingService';
 import { broadcastOnboardingChanged } from './ipc/onboarding.ipc';
 import { AccountSessionRepository } from './db/repositories/AccountSessionRepository';
 import { AccountSessionService, type AccountSessionScheduler } from './services/AccountSessionService';
-import { WarmupRepository } from './db/repositories/WarmupRepository';
-import { WarmupService } from './warmup/WarmupService';
-import { WarmupScheduler } from './warmup/WarmupScheduler';
-import { registerWarmupIpc } from './ipc/warmup.ipc';
 
 let service: AccountService | undefined;
 let cleanupIpc: (() => void) | undefined;
@@ -56,7 +52,6 @@ let scheduler: PublishScheduler | undefined;
 let coordinator: PublishCoordinator | undefined;
 let publishing: PublishingService | undefined;
 let accountSessions: AccountSessionService | undefined;
-let warmupScheduler: WarmupScheduler | undefined;
 
 registerMediaScheme();
 
@@ -86,12 +81,11 @@ if (!gotLock) {
     const onboardingRepository = new OnboardingRepository(database);
     const accountSessionRepository = new AccountSessionRepository(database);
     const onboarding = new OnboardingService(onboardingRepository, accounts, groups, audit, () => { if (service) broadcastAccounts(service); broadcastOnboardingChanged(); workspaceNotify(); });
-    const secretStore = new SecretStore(settings, {
+    service = new AccountService(accounts, audit, profiles, new SecretStore(settings, {
       isEncryptionAvailable: () => safeStorage.isEncryptionAvailable(),
       encryptString: (value) => safeStorage.encryptString(value),
       decryptString: (value) => safeStorage.decryptString(value)
-    });
-    service = new AccountService(accounts, audit, profiles, secretStore, () => { const paused = onboarding?.syncHealthPauses() ?? 0; if (service) broadcastAccounts(service); if (paused) { broadcastOnboardingChanged(); workspaceNotify(); } }, new ProxyTestService(proxyTestEndpoints()), browserHomeUrl());
+    }), () => { const paused = onboarding?.syncHealthPauses() ?? 0; if (service) broadcastAccounts(service); if (paused) { broadcastOnboardingChanged(); workspaceNotify(); } }, new ProxyTestService(proxyTestEndpoints()), browserHomeUrl());
     const sessionRuntime = accountSessionQaRuntime();
     accountSessions = new AccountSessionService(accountSessionRepository, onboardingRepository, accounts, groups, settings, service, onboarding, audit, () => { if (service) broadcastAccounts(service); broadcastOnboardingChanged(); workspaceNotify(); }, sessionRuntime?.now, sessionRuntime?.scheduler);
     accountSessions.recoverAbandoned();
@@ -99,8 +93,8 @@ if (!gotLock) {
     cleanupIpc = registerIpc(service, () => new Set(BrowserWindow.getAllWindows().map((current) => current.webContents.id)));
     registerMediaProtocol(drafts, media);
     const executor = new PublishExecutor(queue, publishRepository, accounts, groups, profiles, service.browser, new FacebookPublisher(new FacebookComposerAdapter(), media), diagnostics, audit, workspaceNotify, liveReadiness);
-    coordinator = new PublishCoordinator(queue, executor);
     const publishingSettings = new PublishingSettingsService(settings, audit, () => { scheduler?.reconfigure(); workspaceNotify(); });
+    coordinator = new PublishCoordinator(queue, executor, workspaceNotify, undefined, (event, batch) => audit.add({ eventType: event, message: event === 'PUBLISH_BATCH_STARTED' ? 'Controlled publishing batch started.' : event === 'PUBLISH_BATCH_COMPLETED' ? 'Controlled publishing batch completed.' : 'Controlled publishing batch stopped.', metadata: JSON.stringify({ requestedCount: batch.requested, accountCount: batch.lanes.length, batchPacingSeconds: publishingSettings.get().batchPacingSeconds, claimed: batch.claimed, completed: batch.completed, skipped: batch.skipped }) }));
     scheduler = new PublishScheduler(queue, coordinator, publishingSettings, workspaceNotify, (accountId) => accounts.get(accountId)?.onboardingStatus === 'READY');
     const operationsReport = new OperationsReportService(accounts, queue, publishRepository, publishingSettings, executor.selectorVersion, app.getVersion(), scheduler);
     publishing = new PublishingService(queue, publishRepository, accounts, groups, media, executor, coordinator, scheduler, publishingSettings, diagnostics, audit, workspaceNotify, liveReadiness, operationsReport);
@@ -119,13 +113,6 @@ if (!gotLock) {
       settings: publishingSettings,
       operations
     }, () => new Set(BrowserWindow.getAllWindows().map((current) => current.webContents.id))));
-    // Warmup Engine
-    const warmupNotify = () => { for (const win of BrowserWindow.getAllWindows()) win.webContents.send('warmup:changed'); };
-    const warmupRepo = new WarmupRepository(database);
-    const warmupService = new WarmupService(warmupRepo, accounts, profiles, secretStore, warmupNotify);
-    cleanupIpc = chainCleanup(cleanupIpc, registerWarmupIpc(warmupService, () => new Set(BrowserWindow.getAllWindows().map((w) => w.webContents.id))));
-    warmupScheduler = new WarmupScheduler(warmupRepo, accounts, warmupService);
-    warmupScheduler.start();
     createWindow();
     app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
   }).catch((error) => {
@@ -138,7 +125,6 @@ if (!gotLock) {
     event.preventDefault();
     quitting = true;
     scheduler?.stop();
-    warmupScheduler?.stop();
     void (async () => {
       const drained = await coordinator?.stopAndDrain(20000) ?? true;
       if (!drained) { await service!.browser.abortRunningContexts(); await coordinator?.stopAndDrain(5000); publishing?.recover(); }

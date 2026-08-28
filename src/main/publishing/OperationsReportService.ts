@@ -13,7 +13,7 @@ export type SanitizedOperationsReport = {
   selectorVersion: string;
   generatedAt: string;
   accounts: Array<{ id: string; name: string; status: string; lastHealthStatus?: string }>;
-  publishing: { enabled: boolean; executionMode: string; canaryMode: boolean; requireReadyAccounts: boolean; schedulerIntervalSeconds: number; maxConcurrentAccounts: number; schedulerState: string; backlogCount: number; sessionCompleted: number; sessionLimit: number };
+  publishing: { enabled: boolean; executionMode: string; canaryMode: boolean; requireReadyAccounts: boolean; schedulerIntervalSeconds: number; maxConcurrentAccounts: number; batchPacingSeconds: number; schedulerState: string; backlogCount: number; sessionCompleted: number; sessionLimit: number };
   queue: { counts: Record<string, number>; recent: Array<{ id: string; title: string; accountName: string; groupName: string; status: string; scheduledAt?: string }> };
   recentAttempts: Array<{ id: string; queueItemId: string; status: string; errorCode?: string; executionMode: string; selectorVersion?: string }>;
   recentSelectorProbes: Array<{ id?: string; accountId: string; groupId: string; status: string; selectorVersion: string; checkedAt: string }>;
@@ -33,7 +33,7 @@ export class OperationsReportService {
       selectorVersion: this.selectorVersion,
       generatedAt: new Date().toISOString(),
       accounts: accountRows.map((account) => ({ id: account.id, name: account.name, status: account.status, lastHealthStatus: account.lastHealthStatus })),
-      publishing: ((value) => ({ enabled: value.enabled, executionMode: value.executionMode, canaryMode: value.canaryMode !== false, requireReadyAccounts: value.requireReadyAccounts === true, schedulerIntervalSeconds: value.schedulerIntervalSeconds, maxConcurrentAccounts: value.maxConcurrentAccounts, schedulerState: this.scheduler?.runtimeState() ?? 'DISARMED', backlogCount: this.queue.dueCount(new Date().toISOString()), sessionCompleted: this.scheduler?.completedThisSession() ?? 0, sessionLimit: value.maxJobsPerSchedulerSession ?? 20 }))(this.settings.get()),
+      publishing: ((value) => ({ enabled: value.enabled, executionMode: value.executionMode, canaryMode: value.canaryMode !== false, requireReadyAccounts: value.requireReadyAccounts === true, schedulerIntervalSeconds: value.schedulerIntervalSeconds, maxConcurrentAccounts: value.maxConcurrentAccounts, batchPacingSeconds: value.batchPacingSeconds, schedulerState: this.scheduler?.runtimeState() ?? 'DISARMED', backlogCount: this.queue.dueCount(new Date().toISOString()), sessionCompleted: this.scheduler?.completedThisSession() ?? 0, sessionLimit: value.maxJobsPerSchedulerSession ?? 20 }))(this.settings.get()),
       queue: { counts, recent: queueRows.slice(0, 25).map((item) => ({ id: item.id, title: item.draftTitle, accountName: item.accountName, groupName: item.groupName, status: item.status, scheduledAt: item.scheduledAt })) },
       recentAttempts: this.attempts.recent(25).map((attempt) => ({ id: attempt.id, queueItemId: attempt.queueItemId, status: attempt.status, errorCode: attempt.errorCode, executionMode: attempt.executionMode, selectorVersion: attempt.selectorVersion })),
       recentSelectorProbes: this.attempts.recentProbes(25).map((probe) => ({ id: probe.id, accountId: probe.accountId, groupId: probe.groupId, status: probe.status, selectorVersion: probe.selectorVersion, checkedAt: probe.checkedAt }))

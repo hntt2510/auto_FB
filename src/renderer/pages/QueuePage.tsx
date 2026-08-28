@@ -4,6 +4,9 @@ import type {
   FacebookAccount,
   FacebookGroup,
   PreflightResult,
+  PublishBatchRuntime,
+  PublishBatchPreview,
+  PublishingEngineStatus,
   PublishAttempt,
   QueueItem,
   QueuePreview,
@@ -54,13 +57,17 @@ export function QueuePage({ accounts, onError }: Props) {
   >([]);
   const [verificationItem, setVerificationItem] = useState<QueueItem>();
   const [busy, setBusy] = useState(false);
+  const [publishStatus, setPublishStatus] = useState<PublishingEngineStatus>();
+  const [batchPreview, setBatchPreview] = useState<PublishBatchPreview>();
+  const [batchIds, setBatchIds] = useState<string[]>([]);
+  const [cooldownNow, setCooldownNow] = useState(Date.now());
   const [batchAction, setBatchAction] = useState<
     "PAUSE" | "RESUME" | "CANCEL"
   >();
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [queue, draftList, groupList] = await Promise.all([
+      const [queue, draftList, groupList, engine] = await Promise.all([
         window.queueApi.list({
           search: search || undefined,
           status: status ? (status as QueueStatus) : undefined,
@@ -71,10 +78,12 @@ export function QueuePage({ accounts, onError }: Props) {
         }),
         window.draftApi.list({ status: "READY" }),
         window.groupApi.list({}),
+        window.publishApi.status(),
       ]);
       setItems(queue);
       setDrafts(draftList);
       setGroups(groupList);
+      setPublishStatus(engine);
     } catch (error) {
       onError(error);
     } finally {
@@ -86,6 +95,11 @@ export function QueuePage({ accounts, onError }: Props) {
     const unsubscribe = window.publishApi.onChanged(() => void load());
     return unsubscribe;
   }, [load]);
+  useEffect(() => {
+    if (!publishStatus?.batch?.lanes.some((lane) => lane.state === 'COOLDOWN')) return;
+    const timer = window.setInterval(() => setCooldownNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [publishStatus?.batch]);
 
   function toggleTarget(accountId: string, groupId: string) {
     setTargets((current) =>
@@ -149,11 +163,20 @@ export function QueuePage({ accounts, onError }: Props) {
     const chosen = items.filter((item) => ids.includes(item.id));
     const accountCount = new Set(chosen.map((item) => item.accountId)).size;
     const groupCount = new Set(chosen.map((item) => item.groupId)).size;
-    let mode: "DRY_RUN" | "LIVE"; let requireReadyAccounts = false;
+    let mode: "DRY_RUN" | "LIVE"; let requireReadyAccounts = false; let canaryMode = true;
     try {
-      const engine = await window.publishApi.status(); mode = engine.settings.executionMode; requireReadyAccounts = engine.settings.requireReadyAccounts === true;
+      const engine = await window.publishApi.status(); setPublishStatus(engine); mode = engine.settings.executionMode; requireReadyAccounts = engine.settings.requireReadyAccounts === true; canaryMode = engine.settings.canaryMode !== false;
     } catch (error) {
       onError(error);
+      return;
+    }
+    if (mode === "LIVE" && canaryMode && ids.length > 1) {
+      onError(new Error("Disable Canary Mode to run more than one LIVE item."));
+      return;
+    }
+    if (mode === "LIVE" && ids.length > 1) {
+      try { setBatchIds(ids); setBatchPreview(await window.publishApi.previewBatch(ids)); }
+      catch (error) { onError(error); }
       return;
     }
     const action =
@@ -168,10 +191,15 @@ export function QueuePage({ accounts, onError }: Props) {
       )
     )
       return;
+    await executeRun(ids);
+  }
+  async function executeRun(ids: string[]) {
     setBusy(true);
     try {
       await window.publishApi.runSelected(ids);
       setSelected(new Set());
+      setBatchPreview(undefined);
+      setBatchIds([]);
       await load();
     } catch (error) {
       onError(error);
@@ -279,6 +307,7 @@ export function QueuePage({ accounts, onError }: Props) {
   const runnable = items.filter(
     (item) => selected.has(item.id) && item.status === "PENDING",
   );
+  const canaryBatchBlocked = publishStatus?.settings.executionMode === "LIVE" && publishStatus.settings.canaryMode !== false && runnable.length > 1;
   return (
     <main className="content">
       <div className="page-heading">
@@ -312,19 +341,23 @@ export function QueuePage({ accounts, onError }: Props) {
             </>
           )}
           {runnable.length > 0 && (
-            <button
-              className="secondary"
-              disabled={busy}
-              onClick={() => void runItems(runnable.map((item) => item.id))}
-            >
-              Run selected ({runnable.length})
-            </button>
+            <>
+              <button
+                className="secondary"
+                disabled={busy || canaryBatchBlocked}
+                onClick={() => void runItems(runnable.map((item) => item.id))}
+              >
+                Run selected ({runnable.length})
+              </button>
+              {canaryBatchBlocked && <small className="inline-warning">Disable Canary Mode to run more than one LIVE item.</small>}
+            </>
           )}
           <button className="primary" onClick={() => setBuilder(true)}>
             ＋ Build queue
           </button>
         </div>
       </div>
+      {publishStatus?.batch && <BatchProgress batch={publishStatus.batch} now={cooldownNow}/>}
       <div className="filters">
         <label>
           Search
@@ -563,9 +596,29 @@ export function QueuePage({ accounts, onError }: Props) {
           onConfirm={applyBatch}
         />
       )}
+      {batchPreview && (
+        <ActionDialog
+          title="Run controlled batch"
+          message={`Run ${batchPreview.requested} selected queue items? Accounts: ${batchPreview.accountCount}. Groups: ${batchPreview.groupCount}. Pacing: ${batchPreview.batchPacingSeconds} sec between posts/account. Minimum pacing time: ${formatBatchDuration(batchPreview.minimumPacingSeconds)}.`}
+          confirmLabel="Run controlled batch"
+          confirmDisabled={batchPreview.blocked > 0}
+          onCancel={() => { setBatchPreview(undefined); setBatchIds([]); }}
+          onConfirm={() => executeRun(batchIds)}
+        >
+          {batchPreview.blocked > 0 ? <div className="inline-warning">Blocked: {batchPreview.blocked}. Fix or remove every blocked item before starting. {batchPreview.items.filter((item) => item.reasons.length).map((item) => `${item.accountName ?? item.queueId}: ${item.reasons.join(', ')}`).join(' · ')}</div> : <div className="notice success">Ready: {batchPreview.ready} of {batchPreview.requested}. Facebook loading, upload, and verification time are not included in the minimum pacing time.</div>}
+        </ActionDialog>
+      )}
     </main>
   );
 }
+
+function BatchProgress({ batch, now }: { batch: PublishBatchRuntime; now: number }) {
+  const cooldown = batch.lanes.find((lane) => lane.state === 'COOLDOWN');
+  const remaining = cooldown?.cooldownUntil ? Math.max(0, Math.ceil((Date.parse(cooldown.cooldownUntil) - now) / 1000)) : cooldown?.remainingSeconds;
+  return <section className="panel operations-recent"><div className="panel-heading"><div><h3>Controlled batch · {batch.state}</h3><small>{batch.processed} / {batch.requested} processed · {batch.source}</small></div>{remaining !== undefined && <strong>Cooldown: {formatBatchDuration(remaining)}</strong>}</div>{batch.current && <p>Current: {batch.current.accountName} → {batch.current.groupName ?? 'group'}</p>}{batch.next && <p>Next: {batch.next.accountName} → {batch.next.groupName ?? 'group'}</p>}{batch.reason && <small>{batch.reason}</small>}</section>;
+}
+
+function formatBatchDuration(seconds: number): string { const minutes = Math.floor(seconds / 60); return minutes ? `${minutes}m ${seconds % 60}s` : `${seconds}s`; }
 
 export function MarkVerifiedDialog({
   item,

@@ -14,6 +14,7 @@ const live: PublishingSettings = {
   maxConcurrentAccounts: 2,
   videoUploadTimeoutSeconds: 600,
   maxJobsPerSchedulerSession: 20,
+  batchPacingSeconds: 120,
   canaryMode: false,
 };
 function harness(overdue = 0, overrides: Partial<typeof live> = {}, accountReady: (accountId: string) => boolean = () => true) {
@@ -31,6 +32,7 @@ function harness(overdue = 0, overrides: Partial<typeof live> = {}, accountReady
     })),
   };
   const coordinator = {
+    isBusy: vi.fn(() => false),
     run: vi.fn(async (ids: string[]) => ({
       requested: ids.length,
       claimed: ids.length,
@@ -121,6 +123,7 @@ describe("PublishScheduler operational state machine", () => {
     expect(coordinator.run).toHaveBeenCalledWith(
       expect.arrayContaining([expect.any(String)]),
       expect.any(Object),
+      "SCHEDULER",
     );
     expect(coordinator.run.mock.calls[0][0]).toHaveLength(3);
     expect(result).toEqual({

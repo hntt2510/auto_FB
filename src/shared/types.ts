@@ -136,6 +136,9 @@ export type ApiErrorCode =
   | 'BROWSER_CLOSED'
   | 'EXECUTION_CANCELLED'
   | 'CANARY_LIMIT'
+  | 'BATCH_LIMIT'
+  | 'BATCH_NOT_READY'
+  | 'PUBLISHING_BUSY'
   | 'LIVE_READINESS_FAILED'
   | 'PREFLIGHT_REQUIRED'
   | 'PREFLIGHT_EXPIRED'
@@ -386,22 +389,29 @@ export type QueueApi = {
 
 export type DashboardApi = { summary: () => Promise<DashboardSummary> };
 
-export type PublishingSettings = { enabled: boolean; executionMode: ExecutionMode; schedulerIntervalSeconds: number; maxConcurrentAccounts: number; videoUploadTimeoutSeconds: number; maxJobsPerSchedulerSession: number; canaryMode?: boolean; requireReadyAccounts?: boolean };
+export type PublishingSettings = { enabled: boolean; executionMode: ExecutionMode; schedulerIntervalSeconds: number; maxConcurrentAccounts: number; videoUploadTimeoutSeconds: number; maxJobsPerSchedulerSession: number; batchPacingSeconds: number; canaryMode?: boolean; requireReadyAccounts?: boolean };
 export type PublishingBlock = { accountId: string; accountName: string; reason: 'LOGIN_REQUIRED' | 'CHECKPOINT'; message: string; blockedAt: string };
 export type PublishingRunResult = { requested: number; claimed: number; completed: number; skipped: number };
+export type BatchItemIssue = { queueId: string; accountId?: string; accountName?: string; groupName?: string; reasons: string[] };
+export type PublishBatchPreview = { requested: number; ready: number; blocked: number; accountCount: number; groupCount: number; batchPacingSeconds: number; minimumPacingSeconds: number; items: BatchItemIssue[] };
+export type PublishBatchSource = 'MANUAL' | 'SCHEDULER';
+export type PublishBatchState = 'RUNNING' | 'COOLDOWN' | 'STOPPING' | 'COMPLETED' | 'INTERRUPTED';
+export type PublishBatchLane = { accountId: string; accountName: string; total: number; processed: number; state: 'RUNNING' | 'COOLDOWN' | 'BLOCKED' | 'COMPLETED' | 'STOPPED'; currentQueueId?: string; currentGroupName?: string; nextQueueId?: string; nextGroupName?: string; cooldownUntil?: string; remainingSeconds?: number };
+export type PublishBatchRuntime = { id: string; source: PublishBatchSource; state: PublishBatchState; requested: number; claimed: number; completed: number; skipped: number; processed: number; startedAt: string; endedAt?: string; reason?: string; current?: { queueId: string; accountId: string; accountName: string; groupName?: string }; next?: { queueId: string; accountId: string; accountName: string; groupName?: string }; lanes: PublishBatchLane[] };
 export type PublishingReadiness = 'NOT_READY' | 'PREFLIGHT_READY' | 'LIVE_ENABLED' | 'DEGRADED';
 export type LiveReadinessReason = 'ENGINE_DISABLED' | 'NOT_LIVE_MODE' | 'ACCOUNT_BLOCKED' | 'ACCOUNT_LOGIN_REQUIRED' | 'ACCOUNT_CHECKPOINT' | 'GROUP_INACTIVE' | 'ASSIGNMENT_MISSING' | 'PREFLIGHT_MISSING' | 'PREFLIGHT_EXPIRED' | 'PREFLIGHT_SELECTOR_VERSION_MISMATCH' | 'PREFLIGHT_SNAPSHOT_MISMATCH' | 'MEDIA_INVALID';
 export type LiveReadiness = { ready: true; preflightId: string } | { ready: false; reasons: LiveReadinessReason[] };
 export type SchedulerRuntimeState = 'DISARMED' | 'ARMED' | 'STOPPING';
 export type SchedulerStopReason = 'OPERATOR_DISARMED' | 'STOP_AFTER_CURRENT' | 'STOP_DRAIN_TIMEOUT' | 'STOP_DRAIN_FAILED' | 'SESSION_JOB_LIMIT_REACHED' | 'APPLICATION_SHUTDOWN';
 export type SchedulerArmPreview = { dueJobs: number; overdueJobs: number; oldestOverdueAt?: string; accountsInvolved: number; groupsInvolved: number; executionMode: ExecutionMode; canaryMode: boolean; sessionLimit: number };
-export type PublishingEngineStatus = { settings: PublishingSettings; schedulerRunning: boolean; schedulerArmed: boolean; schedulerState: SchedulerRuntimeState; schedulerReason?: SchedulerStopReason; sessionCompleted: number; sessionLimit: number; armPreview: SchedulerArmPreview; tickRunning: boolean; running: QueueItem[]; blockedAccounts: PublishingBlock[]; recentAttempts: PublishAttemptSummary[]; dueCount: number; overdueCount: number; selectorVersion: string; readiness: PublishingReadiness; recentProbes: SelectorProbeResult[] };
+export type PublishingEngineStatus = { settings: PublishingSettings; schedulerRunning: boolean; schedulerArmed: boolean; schedulerState: SchedulerRuntimeState; schedulerReason?: SchedulerStopReason; sessionCompleted: number; sessionLimit: number; armPreview: SchedulerArmPreview; tickRunning: boolean; running: QueueItem[]; blockedAccounts: PublishingBlock[]; recentAttempts: PublishAttemptSummary[]; dueCount: number; overdueCount: number; selectorVersion: string; readiness: PublishingReadiness; recentProbes: SelectorProbeResult[]; batch?: PublishBatchRuntime };
 export type RequeueInput = { queueId: string; scheduledAt?: string };
 
 export type PublishApi = {
   status: () => Promise<PublishingEngineStatus>;
   run: (queueId: string) => Promise<PublishingRunResult>;
   runSelected: (queueIds: string[]) => Promise<PublishingRunResult>;
+  previewBatch: (queueIds: string[]) => Promise<PublishBatchPreview>;
   runDue: () => Promise<PublishingRunResult>;
   attempts: (queueId: string) => Promise<PublishAttempt[]>;
   retry: (queueId: string, acknowledgeDuplicateRisk: boolean) => Promise<QueueItem>;
@@ -444,63 +454,3 @@ export type AboutInfo = { appName: string; appVersion: string; databaseSchema: n
 export type OperationsApi = { history: (filter?: PublishHistoryFilter) => Promise<PublishingHistoryRow[]>; exportHistoryCsv: (filter?: PublishHistoryFilter) => Promise<string | undefined>; listBackups: () => Promise<BackupInfo[]>; createBackup: () => Promise<BackupInfo>; restoreBackup: (backupId: string) => Promise<void>; storageUsage: () => Promise<StorageUsage>; cleanDiagnostics: () => Promise<number>; scanOrphanMedia: () => Promise<OrphanMediaScan>; cleanOrphanMedia: (candidateIds: string[]) => Promise<number>; about: () => Promise<AboutInfo> };
 
 export type WorkspaceApi = { groupApi: GroupApi; draftApi: DraftApi; queueApi: QueueApi; dashboardApi: DashboardApi; onboardingApi: OnboardingApi; publishApi: PublishApi; settingsApi: PublishingSettingsApi; operationsApi: OperationsApi };
-
-// ─── Automated Account Warm-up Engine ──────────────────────────────────────
-
-export type WarmupStatus = 'IDLE' | 'RUNNING' | 'PAUSED' | 'DONE' | 'ERROR';
-export type WarmupPhase = 'INITIALIZE' | 'OPEN_WORKSPACE' | 'MAIN_LOOP' | 'FINISH';
-
-export type WarmupConfig = {
-  durationMinutes: number;
-  enableLikes: boolean;
-  enableComments: boolean;
-  enableReels: boolean;
-  headless: boolean;
-};
-
-export const DEFAULT_WARMUP_CONFIG: WarmupConfig = {
-  durationMinutes: 15,
-  enableLikes: false,
-  enableComments: false,
-  enableReels: true,
-  headless: false,
-};
-
-export type WarmupProgress = {
-  id: string;
-  accountId: string;
-  status: WarmupStatus;
-  totalDurationSeconds: number;
-  lastRunAt?: string;
-  lastError?: string;
-  config: WarmupConfig;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type WarmupExecutionLog = {
-  id: string;
-  accountId: string;
-  runId: string;
-  phase: WarmupPhase;
-  action: string;
-  detail?: string;
-  durationMs?: number;
-  ok: boolean;
-  createdAt: string;
-};
-
-export type WarmupStartInput = { accountId: string; config?: Partial<WarmupConfig> };
-export type WarmupListLogsInput = { accountId: string; runId?: string; limit?: number };
-
-export type WarmupApi = {
-  getProgress: (accountId: string) => Promise<WarmupProgress | null>;
-  listAll: () => Promise<WarmupProgress[]>;
-  start: (input: WarmupStartInput) => Promise<WarmupProgress>;
-  stop: (accountId: string) => Promise<WarmupProgress>;
-  pause: (accountId: string) => Promise<WarmupProgress>;
-  resume: (accountId: string) => Promise<WarmupProgress>;
-  updateConfig: (accountId: string, config: Partial<WarmupConfig>) => Promise<WarmupProgress>;
-  getLogs: (input: WarmupListLogsInput) => Promise<WarmupExecutionLog[]>;
-  onChanged: (listener: () => void) => () => void;
-};

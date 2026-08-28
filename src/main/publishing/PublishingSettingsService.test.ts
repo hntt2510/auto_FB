@@ -7,6 +7,7 @@ describe('PublishingSettingsService', () => {
   it('defaults the engine off and validates bounded settings', () => {
     let value: string | undefined; const settings = { get: () => value, set: vi.fn((_key: string, next: string) => { value = next; }) }; const audit = { add: vi.fn() }; const changed = vi.fn(); const service = new PublishingSettingsService(settings as unknown as SettingsRepository, audit as unknown as AuditLogRepository, changed);
     expect(service.get()).toEqual(DEFAULT_PUBLISHING_SETTINGS);
+    value = JSON.stringify({ ...DEFAULT_PUBLISHING_SETTINGS, batchPacingSeconds: undefined }); expect(service.get().batchPacingSeconds).toBe(120);
     expect(() => service.update({ ...DEFAULT_PUBLISHING_SETTINGS, schedulerIntervalSeconds: 10 })).toThrow();
     expect(service.update({ ...DEFAULT_PUBLISHING_SETTINGS, enabled: true }).enabled).toBe(true); expect(audit.add).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'PUBLISH_ENGINE_ENABLED' })); expect(changed).toHaveBeenCalled();
     expect(() => service.update({ ...DEFAULT_PUBLISHING_SETTINGS, executionMode: 'LIVE' })).toThrow();

@@ -109,6 +109,11 @@ export type ApiErrorCode =
   | 'QUEUE_VALIDATION_FAILED'
   | 'DUPLICATE_QUEUE_ITEM'
   | 'INVALID_ASSIGNMENT'
+  | 'GROUP_INACTIVE'
+  | 'CAMPAIGN_NOT_FOUND'
+  | 'VARIANT_NOT_FOUND'
+  | 'PLAN_ITEM_NOT_FOUND'
+  | 'CAMPAIGN_SIMULATION_STALE'
   | 'ENTITY_IN_USE'
   | 'INVALID_STATE'
   | 'PUBLISH_CLAIM_CONFLICT'
@@ -235,7 +240,7 @@ export type LogApi = {
   list: (filter?: LogFilter) => Promise<AuditLog[]>;
 };
 
-export type WindowApi = { accountApi: AccountApi; logApi: LogApi; groupApi: GroupApi; draftApi: DraftApi; queueApi: QueueApi; dashboardApi: DashboardApi; onboardingApi: OnboardingApi; publishApi: PublishApi; settingsApi: PublishingSettingsApi; operationsApi: OperationsApi };
+export type WindowApi = { accountApi: AccountApi; logApi: LogApi; groupApi: GroupApi; draftApi: DraftApi; campaignApi: CampaignApi; queueApi: QueueApi; dashboardApi: DashboardApi; onboardingApi: OnboardingApi; publishApi: PublishApi; settingsApi: PublishingSettingsApi; operationsApi: OperationsApi };
 export type AppBridge = { available: true; version: string };
 
 export type FacebookGroup = {
@@ -306,6 +311,8 @@ export type QueueItem = {
   completedAt?: string;
   latestAttempt?: PublishAttemptSummary;
   outcome?: QueueOutcomeSummary;
+  campaignId?: string;
+  campaignVariantId?: string;
   media: Array<Pick<DraftMedia, 'id' | 'type' | 'originalName' | 'mimeType' | 'fileSize' | 'sortOrder' | 'previewUrl'>>;
   createdAt: string;
   updatedAt: string;
@@ -455,4 +462,154 @@ export type OrphanMediaScan = { candidateIds: string[]; candidateCount: number; 
 export type AboutInfo = { appName: string; appVersion: string; databaseSchema: number; selectorVersion: string; electronVersion: string; playwrightVersion: string };
 export type OperationsApi = { history: (filter?: PublishHistoryFilter) => Promise<PublishingHistoryRow[]>; exportHistoryCsv: (filter?: PublishHistoryFilter) => Promise<string | undefined>; listBackups: () => Promise<BackupInfo[]>; createBackup: () => Promise<BackupInfo>; restoreBackup: (backupId: string) => Promise<void>; storageUsage: () => Promise<StorageUsage>; cleanDiagnostics: () => Promise<number>; scanOrphanMedia: () => Promise<OrphanMediaScan>; cleanOrphanMedia: (candidateIds: string[]) => Promise<number>; about: () => Promise<AboutInfo> };
 
-export type WorkspaceApi = { groupApi: GroupApi; draftApi: DraftApi; queueApi: QueueApi; dashboardApi: DashboardApi; onboardingApi: OnboardingApi; publishApi: PublishApi; settingsApi: PublishingSettingsApi; operationsApi: OperationsApi };
+export type CampaignStatus = 'DRAFT' | 'IN_REVIEW' | 'APPROVED' | 'QUEUED' | 'ARCHIVED';
+export type CampaignVariantFreshness = 'CURRENT' | 'STALE' | 'NOT_APPROVED';
+
+export type Campaign = {
+  id: string;
+  name: string;
+  description?: string;
+  status: CampaignStatus;
+  variantCount: number;
+  planItemCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CampaignFilter = {
+  search?: string;
+  status?: CampaignStatus;
+};
+
+export type CampaignInput = {
+  name: string;
+  description?: string;
+};
+
+export type CampaignVariant = {
+  id: string;
+  campaignId: string;
+  draftId: string;
+  label: string;
+  sortOrder: number;
+  enabled: boolean;
+  approvedSnapshotHash?: string;
+  draftTitle: string;
+  draftStatus: DraftStatus;
+  freshness: CampaignVariantFreshness;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CampaignVariantInput = {
+  campaignId: string;
+  draftId: string;
+  label: string;
+  sortOrder?: number;
+  enabled?: boolean;
+};
+
+export type CampaignVariantUpdateInput = {
+  variantId: string;
+  label?: string;
+  sortOrder?: number;
+  enabled?: boolean;
+};
+
+export type CampaignPlanItem = {
+  id: string;
+  campaignId: string;
+  variantId: string;
+  variantLabel: string;
+  draftId: string;
+  draftTitle: string;
+  accountId: string;
+  accountName: string;
+  groupId: string;
+  groupName: string;
+  groupUrl: string;
+  scheduledAt?: string;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CampaignPlanItemInput = {
+  campaignId: string;
+  variantId: string;
+  accountId: string;
+  groupId: string;
+  scheduledAt?: string;
+  sortOrder?: number;
+};
+
+export type CampaignDetail = Campaign & {
+  variants: CampaignVariant[];
+  planItems: CampaignPlanItem[];
+  freshness: 'CURRENT' | 'APPROVAL_STALE' | 'NOT_APPROVED';
+};
+
+export type CampaignSimulationPlannedRow = {
+  variantId: string;
+  variantLabel: string;
+  draftId: string;
+  draftTitle: string;
+  accountId: string;
+  accountName: string;
+  groupId: string;
+  groupName: string;
+  groupUrl: string;
+  scheduledAt?: string;
+  snapshotHash: string;
+  mediaCount: number;
+};
+
+export type CampaignSimulationIssue = {
+  code: string;
+  message: string;
+  target?: { variantId?: string; accountId?: string; groupId?: string };
+};
+
+export type CampaignSimulationResult = {
+  campaignId: string;
+  campaignName: string;
+  status: 'READY' | 'WARNING' | 'BLOCKED';
+  variantCount: number;
+  targetCount: number;
+  accountCount: number;
+  groupCount: number;
+  scheduledCount: number;
+  unscheduledCount: number;
+  plannedRows: CampaignSimulationPlannedRow[];
+  warnings: CampaignSimulationIssue[];
+  blockers: CampaignSimulationIssue[];
+  freshnessToken: string;
+  simulatedAt: string;
+};
+
+export type CommitCampaignInput = {
+  campaignId: string;
+  freshnessToken: string;
+};
+
+export type CampaignApi = {
+  list: (filter?: CampaignFilter) => Promise<Campaign[]>;
+  get: (campaignId: string) => Promise<CampaignDetail>;
+  create: (input: CampaignInput) => Promise<Campaign>;
+  update: (campaignId: string, input: CampaignInput) => Promise<Campaign>;
+  delete: (campaignId: string) => Promise<void>;
+  requestReview: (campaignId: string) => Promise<CampaignDetail>;
+  requestChanges: (campaignId: string) => Promise<CampaignDetail>;
+  approve: (campaignId: string) => Promise<CampaignDetail>;
+  archive: (campaignId: string) => Promise<CampaignDetail>;
+  addVariant: (input: CampaignVariantInput) => Promise<CampaignVariant>;
+  updateVariant: (input: CampaignVariantUpdateInput) => Promise<CampaignVariant>;
+  deleteVariant: (variantId: string) => Promise<void>;
+  addPlanItem: (input: CampaignPlanItemInput) => Promise<CampaignPlanItem>;
+  deletePlanItem: (planItemId: string) => Promise<void>;
+  simulate: (campaignId: string) => Promise<CampaignSimulationResult>;
+  commitToQueue: (input: CommitCampaignInput) => Promise<QueueItem[]>;
+  onChanged: (listener: () => void) => () => void;
+};
+
+export type WorkspaceApi = { groupApi: GroupApi; draftApi: DraftApi; campaignApi: CampaignApi; queueApi: QueueApi; dashboardApi: DashboardApi; onboardingApi: OnboardingApi; publishApi: PublishApi; settingsApi: PublishingSettingsApi; operationsApi: OperationsApi };

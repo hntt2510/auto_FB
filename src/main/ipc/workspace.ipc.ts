@@ -15,8 +15,10 @@ import { registerOperationsIpc } from './operations.ipc';
 import type { OnboardingService } from '@main/services/OnboardingService';
 import { registerOnboardingIpc } from './onboarding.ipc';
 import type { AccountSessionService } from '@main/services/AccountSessionService';
+import type { CampaignService } from '@main/services/CampaignService';
+import { registerCampaignIpc } from './campaign.ipc';
 
-export function registerWorkspaceIpc(services: { groups: GroupService; drafts: DraftService; queue: QueueService; dashboard: DashboardService; onboarding: OnboardingService; accountSessions: AccountSessionService; publishing: PublishingService; settings: PublishingSettingsService; operations: OperationsService }, allowedSenderIds: () => ReadonlySet<number>): () => void {
-  const cleanups = [registerGroupIpc(services.groups, allowedSenderIds), registerDraftIpc(services.drafts, allowedSenderIds), registerQueueIpc(services.queue, allowedSenderIds), registerDashboardIpc(services.dashboard, allowedSenderIds), registerOnboardingIpc(services.onboarding, services.accountSessions, allowedSenderIds), registerPublishingIpc(services.publishing, allowedSenderIds), registerSettingsIpc(services.settings, allowedSenderIds), registerOperationsIpc(services.operations, allowedSenderIds)];
+export function registerWorkspaceIpc(services: { groups: GroupService; drafts: DraftService; campaigns: CampaignService; queue: QueueService; dashboard: DashboardService; onboarding: OnboardingService; accountSessions: AccountSessionService; publishing: PublishingService; settings: PublishingSettingsService; operations: OperationsService }, allowedSenderIds: () => ReadonlySet<number>): () => void {
+  const cleanups = [registerGroupIpc(services.groups, allowedSenderIds), registerDraftIpc(services.drafts, allowedSenderIds), registerCampaignIpc(services.campaigns, allowedSenderIds), registerQueueIpc(services.queue, allowedSenderIds), registerDashboardIpc(services.dashboard, allowedSenderIds), registerOnboardingIpc(services.onboarding, services.accountSessions, allowedSenderIds), registerPublishingIpc(services.publishing, allowedSenderIds), registerSettingsIpc(services.settings, allowedSenderIds), registerOperationsIpc(services.operations, allowedSenderIds)];
   return () => cleanups.forEach((cleanup) => cleanup());
 }

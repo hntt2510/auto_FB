@@ -8,6 +8,7 @@ export type RendererBridge = {
   publishApi?: { status?: unknown; onChanged?: unknown };
   groupApi?: { list?: unknown };
   draftApi?: { list?: unknown };
+  campaignApi?: { list?: unknown };
   queueApi?: { list?: unknown };
   settingsApi?: { getPublishing?: unknown };
   logApi?: { list?: unknown };
@@ -25,6 +26,7 @@ export function isOperationalBridge(value: RendererBridge | undefined): boolean 
     typeof value.publishApi?.onChanged === 'function' &&
     typeof value.groupApi?.list === 'function' &&
     typeof value.draftApi?.list === 'function' &&
+    typeof value.campaignApi?.list === 'function' &&
     typeof value.queueApi?.list === 'function' &&
     typeof value.settingsApi?.getPublishing === 'function' &&
     typeof value.logApi?.list === 'function'

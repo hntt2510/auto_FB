@@ -26,9 +26,16 @@ export class DraftService {
   async delete(draftId: string): Promise<void> {
     const id = this.validId(draftId); const draft = this.drafts.get(id); if (!draft) throw new AppError('DRAFT_NOT_FOUND', 'Draft not found.');
     if (this.queue.hasActiveForDraft(id)) throw new AppError('ENTITY_IN_USE', 'Cancel or remove active queue items before deleting this draft.');
-    const assetIds = this.drafts.delete(id);
-    await this.cleanupAssets(assetIds);
-    this.auditSafe('DRAFT_DELETED', `Draft ${draft.title} deleted.`, id); this.notifySafe();
+    try {
+      const assetIds = this.drafts.delete(id);
+      await this.cleanupAssets(assetIds);
+      this.auditSafe('DRAFT_DELETED', `Draft ${draft.title} deleted.`, id); this.notifySafe();
+    } catch (error) {
+      if (String(error).toLowerCase().includes('foreign key')) {
+        throw new AppError('ENTITY_IN_USE', 'Draft cannot be deleted because it is referenced by a campaign.');
+      }
+      throw error;
+    }
   }
 
   async addMedia(draftId: string): Promise<DraftMedia | undefined> {

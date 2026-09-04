@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { AboutInfo, AccountApi, AccountOnboarding, AccountOperationsSummary, AccountSessionDetail, AccountSessionEndInput, AccountSessionNavigationInput, AccountSessionNavigationResult, AccountSessionSettings, AccountSessionStartInput, AssignmentAccount, AssignmentMatrix, AuditLog, BackupInfo, CreateAccountInput, DashboardApi, DashboardSummary, DeleteAccountInput, Draft, DraftApi, DraftFilter, DraftInput, DraftMedia, DraftStatus, FacebookAccount, FacebookGroup, GroupApi, GroupFilter, GroupImportPreview, GroupImportResult, GroupInput, GroupOpenResult, GroupOperationsSummary, HealthCheckResult, LiveReadiness, LogApi, LogFilter, ManualSession, MediaReorderInput, OnboardingApi, OnboardingOverview, OnboardingPlanTemplate, OnboardingStartInput, OnboardingTaskStatusInput, OnboardingTaskUpdateInput, OperationsApi, OrphanMediaScan, PlannerSummary, PreflightResult, ProxyImportPreview, ProxyTestInput, ProxyTestResult, PublishApi, PublishAttempt, PublishBatchPreview, PublishHistoryFilter, PublishingEngineStatus, PublishingHistoryRow, PublishingRunResult, PublishingSettings, PublishingSettingsApi, PublishingSettingsUpdate, QueueApi, QueueBatchActionInput, QueueBatchInput, QueueBatchRescheduleInput, QueueFilter, QueueItem, QueueOptions, QueuePreview, ReconciliationRecord, RequeueInput, SelectorProbeResult, StorageUsage, UpdateAccountInput, WarmUpTask } from '@shared/types';
+import type { AboutInfo, AccountApi, AccountOnboarding, AccountOperationsSummary, AccountSessionDetail, AccountSessionEndInput, AccountSessionNavigationInput, AccountSessionNavigationResult, AccountSessionSettings, AccountSessionStartInput, AssignmentAccount, AssignmentMatrix, AuditLog, BackupInfo, Campaign, CampaignApi, CampaignDetail, CampaignFilter, CampaignInput, CampaignPlanItem, CampaignPlanItemInput, CampaignSimulationResult, CampaignVariant, CampaignVariantInput, CampaignVariantUpdateInput, CommitCampaignInput, CreateAccountInput, DashboardApi, DashboardSummary, DeleteAccountInput, Draft, DraftApi, DraftFilter, DraftInput, DraftMedia, DraftStatus, FacebookAccount, FacebookGroup, GroupApi, GroupFilter, GroupImportPreview, GroupImportResult, GroupInput, GroupOpenResult, GroupOperationsSummary, HealthCheckResult, LiveReadiness, LogApi, LogFilter, ManualSession, MediaReorderInput, OnboardingApi, OnboardingOverview, OnboardingPlanTemplate, OnboardingStartInput, OnboardingTaskStatusInput, OnboardingTaskUpdateInput, OperationsApi, OrphanMediaScan, PlannerSummary, PreflightResult, ProxyImportPreview, ProxyTestInput, ProxyTestResult, PublishApi, PublishAttempt, PublishBatchPreview, PublishHistoryFilter, PublishingEngineStatus, PublishingHistoryRow, PublishingRunResult, PublishingSettings, PublishingSettingsApi, PublishingSettingsUpdate, QueueApi, QueueBatchActionInput, QueueBatchInput, QueueBatchRescheduleInput, QueueFilter, QueueItem, QueueOptions, QueuePreview, ReconciliationRecord, RequeueInput, SelectorProbeResult, StorageUsage, UpdateAccountInput, WarmUpTask } from '@shared/types';
 
 type IpcResponse<T> = { ok: true; data: T } | { ok: false; error: { code: string; message: string } };
 
@@ -65,6 +65,30 @@ const draftApi: DraftApi = {
   addMedia: (draftId: string) => invoke<DraftMedia | undefined>('drafts:add-media', draftId),
   removeMedia: (draftId: string, mediaId: string) => invoke<void>('drafts:remove-media', { draftId, mediaId }),
   reorderMedia: (input: MediaReorderInput) => invoke<Draft>('drafts:reorder-media', input)
+};
+
+const campaignApi: CampaignApi = {
+  list: (filter?: CampaignFilter) => invoke<Campaign[]>('campaigns:list', filter ?? {}),
+  get: (campaignId: string) => invoke<CampaignDetail>('campaigns:get', campaignId),
+  create: (input: CampaignInput) => invoke<Campaign>('campaigns:create', input),
+  update: (campaignId: string, input: CampaignInput) => invoke<Campaign>('campaigns:update', { campaignId, ...input }),
+  delete: (campaignId: string) => invoke<void>('campaigns:delete', campaignId),
+  requestReview: (campaignId: string) => invoke<CampaignDetail>('campaigns:request-review', campaignId),
+  requestChanges: (campaignId: string) => invoke<CampaignDetail>('campaigns:request-changes', campaignId),
+  approve: (campaignId: string) => invoke<CampaignDetail>('campaigns:approve', campaignId),
+  archive: (campaignId: string) => invoke<CampaignDetail>('campaigns:archive', campaignId),
+  addVariant: (input: CampaignVariantInput) => invoke<CampaignVariant>('campaigns:add-variant', input),
+  updateVariant: (input: CampaignVariantUpdateInput) => invoke<CampaignVariant>('campaigns:update-variant', input),
+  deleteVariant: (variantId: string) => invoke<void>('campaigns:delete-variant', variantId),
+  addPlanItem: (input: CampaignPlanItemInput) => invoke<CampaignPlanItem>('campaigns:add-plan-item', input),
+  deletePlanItem: (planItemId: string) => invoke<void>('campaigns:delete-plan-item', planItemId),
+  simulate: (campaignId: string) => invoke<CampaignSimulationResult>('campaigns:simulate', campaignId),
+  commitToQueue: (input: CommitCampaignInput) => invoke<QueueItem[]>('campaigns:commit-queue', input),
+  onChanged: (listener: () => void) => {
+    const callback = () => listener();
+    ipcRenderer.on('publishing:changed', callback);
+    return () => ipcRenderer.removeListener('publishing:changed', callback);
+  }
 };
 
 const queueApi: QueueApi = {
@@ -144,6 +168,7 @@ contextBridge.exposeInMainWorld('appBridge', { available: true, version: '1' });
 contextBridge.exposeInMainWorld('logApi', logApi);
 contextBridge.exposeInMainWorld('groupApi', groupApi);
 contextBridge.exposeInMainWorld('draftApi', draftApi);
+contextBridge.exposeInMainWorld('campaignApi', campaignApi);
 contextBridge.exposeInMainWorld('queueApi', queueApi);
 contextBridge.exposeInMainWorld('dashboardApi', dashboardApi);
 contextBridge.exposeInMainWorld('onboardingApi', onboardingApi);

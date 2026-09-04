@@ -21,6 +21,7 @@ import { HistoryPage } from "./pages/HistoryPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { AboutPage } from "./pages/AboutPage";
 import { OnboardingPage } from "./pages/OnboardingPage";
+import { CampaignsPage } from "./pages/CampaignsPage";
 
 type Route =
   | "dashboard"
@@ -28,6 +29,7 @@ type Route =
   | "onboarding"
   | "groups"
   | "drafts"
+  | "campaigns"
   | "queue"
   | "planner"
   | "publishing"
@@ -130,6 +132,8 @@ export default function App() {
       <GroupsPage accounts={accounts} onError={onError} />
     ) : route === "drafts" ? (
       <DraftsPage onError={onError} />
+    ) : route === "campaigns" ? (
+      <CampaignsPage onError={onError} onNavigate={(target) => setRoute(target)} />
     ) : route === "queue" ? (
       <QueuePage accounts={accounts} onError={onError} />
     ) : route === "planner" ? (
@@ -151,6 +155,7 @@ export default function App() {
     ["accounts", "Accounts", "◉"],
     ["groups", "Groups", "◎"],
     ["drafts", "Drafts", "▤"],
+    ["campaigns", "Campaigns", "◈"],
     ["queue", "Queue", "↝"],
     ["planner", "Planner", "◫"],
     ["publishing", "Publishing", "▶"],

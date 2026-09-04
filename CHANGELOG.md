@@ -1,5 +1,15 @@
 # Changelog
 
+## Campaign Workspace V1
+
+- Added Campaign Workspace V1 for multi-variant and multi-target campaign planning without duplicating the publishing engine.
+- Implemented formal approval workflow: `DRAFT` → `IN_REVIEW` → `APPROVED` → `QUEUED` / `ARCHIVED`.
+- Integrated strict content integrity hashing (`buildSnapshotHash`): post-approval draft or media changes immediately trigger `APPROVAL_STALE` and block execution.
+- Added read-only Queue Simulation providing pre-materialization conflict detection, planned row previews, and deterministic freshness tokens.
+- Added transactional all-or-nothing "Commit to Queue" that materializes immutable queue rows under existing validation semantics.
+- Extended Schema Migration to Version 8 with new tables `campaigns`, `campaign_variants`, and `campaign_plan_items`, and queue campaign linkage.
+- Preserved complete backward compatibility for manual and legacy queue items.
+
 ## 0.7.0 - Production Operations V2
 
 - Added controlled scheduler arming, overdue review, per-session caps, and stop-after-current behavior.

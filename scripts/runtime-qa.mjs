@@ -68,7 +68,7 @@ async function startBrowserFixture() {
 }
 
 async function open(page, label) {
-  await page.getByRole("button", { name: new RegExp(label) }).click();
+  await page.locator(".side-nav").getByRole("button", { name: new RegExp(label) }).click();
   await page
     .getByRole("heading", {
       name:
@@ -96,6 +96,7 @@ try {
     "Account Onboarding",
     "Groups",
     "Drafts",
+    "Campaigns",
     "Queue",
     "Planner",
     "Publishing",
@@ -106,6 +107,7 @@ try {
   ])
     assert(
       (await page
+        .locator(".side-nav")
         .getByRole("button", { name: new RegExp(label) })
         .count()) === 1,
       `Missing navigation: ${label}`,
@@ -279,7 +281,7 @@ try {
   await page.locator(".onboarding-account").filter({ hasText: "QA Checkpoint Account" }).click();
   await page.getByRole("button", { name: "Start Session", exact: true }).waitFor();
   await page.getByRole("button", { name: "Start Session", exact: true }).click();
-  await page.getByText("ACTIVE", { exact: true }).first().waitFor();
+  await page.getByText("ACTIVE", { exact: true }).first().waitFor({ timeout: 60_000 });
   browserFixtureMode = "CHECKPOINT";
   await page.getByRole("button", { name: "Health Check", exact: true }).click();
   await page.getByText("PAUSED", { exact: true }).first().waitFor();
@@ -313,6 +315,85 @@ try {
     .getByRole("heading", { name: "Account assignment matrix" })
     .waitFor();
   await page.getByRole("button", { name: "Close" }).click();
+
+  // Campaign Workspace V1 end-to-end verification (Steps 1-17)
+  // Step 3: create Draft
+  const campaignDraft = await page.evaluate(async () => {
+    return window.draftApi.create({
+      title: "QA Campaign Draft",
+      body: "Campaign planning promotion body text.",
+    });
+  });
+  // Step 4: make Draft READY
+  await page.evaluate(async (id) => {
+    return window.draftApi.setStatus(id, "READY");
+  }, campaignDraft.id);
+
+  // Navigate to Campaigns
+  await open(page, "Campaigns");
+
+  // Step 5: create Campaign
+  await page.getByRole("button", { name: /New Campaign/i }).click();
+  await page.locator(".modal-card input").fill("Summer Launch Campaign");
+  await page.locator(".modal-card").getByRole("button", { name: /Create Campaign/i }).click();
+  await page.getByText("Summer Launch Campaign").first().waitFor();
+
+  // Step 6: attach Draft as Variant A
+  await page.getByRole("button", { name: /Add Variant/i }).click();
+  await page.locator(".modal-card select").selectOption(campaignDraft.id);
+  await page.locator(".modal-card input").fill("Variant A");
+  await page.locator(".modal-card").getByRole("button", { name: /Add Variant/i }).click();
+  await page.getByText("Variant A").first().waitFor();
+
+  // Step 7: seeded.accountId and seeded.groupId already have valid assignment fixture
+  // Step 8: add plan item
+  await page.getByRole("button", { name: /Add Target/i }).click();
+  await page.locator(".modal-card select").nth(1).selectOption(seeded.accountId);
+  await page.locator(".modal-card select").nth(2).selectOption(seeded.groupId);
+  await page.locator(".modal-card input[type='datetime-local']").fill("2026-09-30T10:00");
+  await page.locator(".modal-card").getByRole("button", { name: /Add Target/i }).click();
+  await page.getByText("QA Group").first().waitFor();
+
+  // Step 9: request review
+  await page.getByRole("button", { name: /Request Review/i }).click();
+  await page.getByText("IN_REVIEW", { exact: true }).first().waitFor();
+
+  // Step 10: approve campaign
+  await page.getByRole("button", { name: /Approve Campaign/i }).click();
+  await page.getByText("APPROVED", { exact: true }).first().waitFor();
+
+  // Step 11: simulate campaign
+  await page.getByRole("button", { name: /Simulate Campaign/i }).click();
+
+  // Step 12: verify simulation preview
+  await page.locator(".simulation-stat-pill").filter({ hasText: "READY" }).waitFor();
+  await page.getByText("Planned Queue Rows Preview:").waitFor();
+
+  // Step 13: verify Queue still unchanged before commit
+  const queueBeforeCommit = await page.evaluate(() => window.queueApi.list({}));
+  assert(queueBeforeCommit.length === 2, "Queue was unexpectedly modified before commit.");
+
+  // Step 14: commit to Queue
+  await page.getByRole("button", { name: /Commit to Queue/i }).click();
+  await page.locator(".modal-card").getByRole("button", { name: /Confirm & Commit/i }).click();
+  await page.getByText("QUEUED", { exact: true }).first().waitFor();
+
+  // Step 15: verify Queue row appears
+  const queueAfterCommit = await page.evaluate(() => window.queueApi.list({}));
+  assert(queueAfterCommit.length === 3, "Queue row was not created on commit.");
+  const committedCampaignItem = queueAfterCommit.find((item) => item.draftTitle === "QA Campaign Draft");
+  assert(committedCampaignItem && committedCampaignItem.campaignId, "Committed campaign item missing or unlinked.");
+
+  // Step 16: verify Planner can see scheduled row when scheduled
+  await open(page, "Planner");
+  await page.getByText("QA Campaign Draft").first().waitFor();
+
+  // Step 17: verify no Facebook Post action occurred
+  const publishState = await page.evaluate(() => window.publishApi.status());
+  assert(publishState.running.length === 0, "Publish engine triggered during campaign workflow.");
+  const attempts = await page.evaluate((id) => window.publishApi.attempts(id), committedCampaignItem.id);
+  assert(attempts.length === 0, "Facebook publish attempts detected for campaign queue item.");
+
   const exportPaths = { csv: join(userData, "publishing-history.csv"), json: join(userData, "operations-report.json") };
   await first.application.evaluate(({ dialog }, paths) => { let call = 0; dialog.showSaveDialog = async () => ({ canceled: false, filePath: call++ === 0 ? paths.csv : paths.json }); }, exportPaths);
   await page.evaluate(async () => { await window.operationsApi.exportHistoryCsv({}); await window.publishApi.exportReport(); });
@@ -326,7 +407,7 @@ try {
     groupOps: await window.groupApi.operations(),
   }));
   assert(
-    maintenance.backup.schemaVersion === 7,
+    maintenance.backup.schemaVersion === 8,
     "Backup schema validation failed.",
   );
   assert(
@@ -339,11 +420,11 @@ try {
   );
   assert(maintenance.about.appVersion === "0.7.0", "About version mismatch.");
   assert(
-    maintenance.accountOps.find((item) => item.accountId === seeded.accountId)?.pendingQueue === 2,
+    maintenance.accountOps.find((item) => item.accountId === seeded.accountId)?.pendingQueue === 3,
     "Account queue linkage mismatch.",
   );
   assert(
-    maintenance.groupOps[0].activeQueueCount === 2,
+    maintenance.groupOps[0].activeQueueCount === 3,
     "Group queue aggregate mismatch.",
   );
   await first.application.close();
@@ -357,7 +438,7 @@ try {
     onboarding: await window.onboardingApi.get(onboardingAccountId),
     accountSessions: await window.onboardingApi.sessionDetail(onboardingAccountId),
   }), seeded.accountId);
-  assert(persisted.queue.length === 2, "Queue did not persist across restart.");
+  assert(persisted.queue.length === 3, "Queue did not persist across restart.");
   assert(
     persisted.status.schedulerState === "DISARMED",
     "Scheduler arming persisted across restart.",
@@ -390,6 +471,7 @@ try {
         "planner",
         "queue outcomes",
         "groups matrix",
+        "campaign workspace v1 end-to-end",
         "backup",
         "storage",
         "sanitized exports",

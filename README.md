@@ -82,12 +82,24 @@ The application prevents duplicate launches with an application single-instance 
 
 ## Content operations workspace
 
-The sidebar includes Dashboard, Accounts, Groups, Drafts, Queue, and Audit Logs. Goal 2 adds local group records, indexed tags, account/group assignments, a managed media library, explicit draft saving, and a reviewable queue of immutable snapshots.
+The sidebar includes Dashboard, Accounts, Account Onboarding, Groups, Drafts, Campaigns, Queue, Planner, Publishing, History, Settings, Audit Logs, and About.
 
 - Group URLs are normalized to `https://www.facebook.com/groups/{identifier}`. Group open is always a visible manual navigation through the selected assigned account; it never posts or publishes.
 - Draft media is copied into `{userData}/fb-account-manager/media`, checked by extension and file signature, and served to the renderer only through the confined `app-media://asset/{id}` protocol. Images are limited to 25 MiB and videos to 500 MiB.
 - Queue creation requires a READY draft and active account/group assignment. Items are immutable snapshots with `PENDING`, `PAUSED`, `RUNNING`, `SUBMITTED`, `SUCCEEDED`, `FAILED`, `NEEDS_ATTENTION`, or `CANCELLED` states; later draft edits do not change queued history.
 - Scheduled times are entered locally and stored as UTC ISO timestamps. Due items are labelled for review; the opt-in publishing engine described below is the only execution path.
+
+### Campaign Workspace V1
+
+Campaign Workspace V1 introduces a higher-level planning and governance workspace on top of Accounts, Groups, Drafts, managed media, and the existing immutable Queue. It is strictly for planning and review; it does NOT create a secondary publishing engine, execute browser automation, or post directly to Facebook. The existing Queue remains the sole executable publishing source.
+
+The campaign workflow enforces explicit state progression and content integrity:
+- **Planning (DRAFT):** Define a campaign, attach multiple Drafts as content variants (e.g. Variant A, Variant B), and construct targeted plan items linking each variant to specific account/group pairs with optional UTC schedule times.
+- **Review (IN_REVIEW):** Move the campaign to review once at least one enabled variant and one target plan item exist and all referenced drafts are in `READY` status. Operators can review or request changes back to `DRAFT`.
+- **Approval (APPROVED):** Approving a campaign captures exact cryptographic snapshot hashes (`buildSnapshotHash`) of all enabled variants and their underlying draft title, body, link, and ordered media assets. Any subsequent modification to an approved draft immediately flags the campaign as `APPROVAL_STALE`, blocking queue materialization until changes are re-reviewed and approved.
+- **Simulation (READ-ONLY):** Runs a comprehensive verification of account assignments, active group status, draft readiness, approval freshness, and schedule conflicts. Returns deterministic previews of planned queue rows and produces a deterministic `freshnessToken`. Simulation creates zero Queue rows and performs zero Facebook or browser operations.
+- **Commit to Queue (TRANSACTIONAL):** An explicit, all-or-nothing action that validates simulation freshness and creates immutable Queue snapshots for all planned rows in a single SQLite transaction, transitioning the campaign to `QUEUED`. If any single row fails validation, zero Queue rows are created.
+- **Publishing Pipeline:** Once committed, newly created queue rows are managed and executed exclusively through the existing Queue, Planner, and Publishing Engine with existing safeguards (dry run, canary mode, batch pacing, and preflights). No platform bypass or automated Facebook post acceptance is implied.
 
 All workspace mutations are validated in the renderer and main process, use transactional repositories, and write concise audit events without draft bodies, media contents, cookies, tokens, or proxy passwords.
 

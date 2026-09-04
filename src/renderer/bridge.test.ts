@@ -10,6 +10,7 @@ const bridge = {
   publishApi: { status: () => Promise.resolve(undefined), onChanged: () => () => undefined },
   groupApi: { list: () => Promise.resolve([]) },
   draftApi: { list: () => Promise.resolve([]) },
+  campaignApi: { list: () => Promise.resolve([]) },
   queueApi: { list: () => Promise.resolve([]) },
   settingsApi: { getPublishing: () => Promise.resolve(undefined) },
   logApi: { list: () => Promise.resolve([]) }

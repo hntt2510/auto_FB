@@ -22,6 +22,8 @@ import { GroupService } from './services/GroupService';
 import { DraftService } from './services/DraftService';
 import { QueueService } from './services/QueueService';
 import { DashboardService } from './services/DashboardService';
+import { CampaignRepository } from './db/repositories/CampaignRepository';
+import { CampaignService } from './services/CampaignService';
 import { registerWorkspaceIpc } from './ipc/workspace.ipc';
 import { PublishRepository } from './db/repositories/PublishRepository';
 import { FacebookComposerAdapter } from './publishing/FacebookComposerAdapter';
@@ -73,6 +75,7 @@ if (!gotLock) {
     const groups = new GroupRepository(database);
     const drafts = new DraftRepository(database);
     const queue = new QueueRepository(database);
+    const campaigns = new CampaignRepository(database);
     const media = new MediaStorageService(paths.media);
     const publishRepository = new PublishRepository(database);
     const liveReadiness = new LiveReadinessService(accounts, groups, publishRepository, media);
@@ -102,9 +105,11 @@ if (!gotLock) {
     const operations = new OperationsService(database, paths, publishRepository, scheduler, audit, { appName: 'Facebook Account Manager', appVersion: app.getVersion(), databaseSchema: LATEST_SCHEMA_VERSION, selectorVersion: executor.selectorVersion, electronVersion: process.versions.electron, playwrightVersion: dependencyVersion('playwright') }, async (backupPath) => {
       scheduler?.stop(); await accountSessions?.stopAll('APPLICATION_SHUTDOWN'); await service?.browser.closeAll(); cleanupIpc?.(); database?.close(); database = undefined; const temporary = paths.database + '.restore'; await rm(temporary, { force: true }); await copyFile(backupPath, temporary); await rm(paths.database + '-wal', { force: true }); await rm(paths.database + '-shm', { force: true }); await rm(paths.database, { force: true }); await rename(temporary, paths.database); quitting = true; app.relaunch(); app.exit(0);
     });
+    const campaignService = new CampaignService(database, campaigns, drafts, accounts, groups, queue, audit, workspaceNotify);
     cleanupIpc = chainCleanup(cleanupIpc, registerWorkspaceIpc({
       groups: new GroupService(groups, accounts, queue, service.browser, audit, workspaceNotify),
       drafts: new DraftService(drafts, queue, media, audit, workspaceNotify),
+      campaigns: campaignService,
       queue: new QueueService(queue, drafts, accounts, groups, media, audit, workspaceNotify),
       dashboard: new DashboardService(database, publishingSettings, accountSessionRepository),
       onboarding,

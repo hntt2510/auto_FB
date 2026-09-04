@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 
-export const LATEST_SCHEMA_VERSION = 7;
+export const LATEST_SCHEMA_VERSION = 8;
 
 export function runMigrations(db: Database.Database): void {
   db.exec(`
@@ -12,9 +12,10 @@ export function runMigrations(db: Database.Database): void {
 
   const applied = new Set<number>((db.prepare('SELECT version FROM schema_migrations ORDER BY version').all() as { version: number }[]).map((row) => row.version));
   // Commit 839cf21 introduced schema 8 exclusively for the reverted Warmup
-  // Engine. Remove only those isolated tables so existing local workspaces
-  // return safely to the supported schema-7 baseline without a new migration.
-  if (applied.has(8)) {
+  // Engine. Clean up those isolated tables only if the new Campaign Workspace
+  // migration 8 hasn't been applied yet.
+  const hasCampaignsTable = Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='campaigns'").get());
+  if (applied.has(8) && !hasCampaignsTable) {
     db.transaction(() => {
       db.exec('DROP TABLE IF EXISTS warmup_execution_logs; DROP TABLE IF EXISTS account_warmup_progress;');
       db.prepare('DELETE FROM schema_migrations WHERE version = 8').run();
@@ -376,6 +377,50 @@ export function runMigrations(db: Database.Database): void {
       CREATE INDEX idx_account_sessions_status_started ON account_sessions(status, started_at DESC);
       CREATE INDEX idx_account_sessions_day ON account_sessions(account_id, onboarding_day, status);
       CREATE UNIQUE INDEX idx_account_sessions_one_open ON account_sessions(account_id) WHERE status IN ('ACTIVE', 'PAUSED');
+    `],
+    [8, `
+      CREATE TABLE campaigns (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT,
+        status TEXT NOT NULL DEFAULT 'DRAFT' CHECK (status IN ('DRAFT', 'IN_REVIEW', 'APPROVED', 'QUEUED', 'ARCHIVED')),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_campaigns_status ON campaigns(status, updated_at DESC);
+
+      CREATE TABLE campaign_variants (
+        id TEXT PRIMARY KEY,
+        campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+        draft_id TEXT NOT NULL REFERENCES drafts(id) ON DELETE RESTRICT,
+        label TEXT NOT NULL,
+        sort_order INTEGER NOT NULL CHECK (sort_order >= 0),
+        enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+        approved_snapshot_hash TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_campaign_variants_campaign ON campaign_variants(campaign_id, sort_order ASC);
+      CREATE INDEX idx_campaign_variants_draft ON campaign_variants(draft_id);
+
+      CREATE TABLE campaign_plan_items (
+        id TEXT PRIMARY KEY,
+        campaign_id TEXT NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+        variant_id TEXT NOT NULL REFERENCES campaign_variants(id) ON DELETE CASCADE,
+        account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+        scheduled_at TEXT,
+        sort_order INTEGER NOT NULL CHECK (sort_order >= 0),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX idx_campaign_plan_items_campaign ON campaign_plan_items(campaign_id, sort_order ASC);
+      CREATE INDEX idx_campaign_plan_items_target ON campaign_plan_items(account_id, group_id);
+      CREATE INDEX idx_campaign_plan_items_variant ON campaign_plan_items(variant_id);
+
+      ALTER TABLE queue_items ADD COLUMN campaign_id TEXT REFERENCES campaigns(id) ON DELETE SET NULL;
+      ALTER TABLE queue_items ADD COLUMN campaign_variant_id TEXT REFERENCES campaign_variants(id) ON DELETE SET NULL;
+      CREATE INDEX idx_queue_items_campaign ON queue_items(campaign_id, campaign_variant_id);
     `]
   ];
 

@@ -120,5 +120,16 @@ export const accountSessionNavigationSchema = z.object({ accountId: accountIdSch
 });
 export const accountSessionGroupSchema = z.object({ accountId: accountIdSchema, groupId: groupIdSchema });
 
+export const campaignIdSchema = accountIdSchema;
+export const campaignVariantIdSchema = accountIdSchema;
+export const campaignPlanItemIdSchema = accountIdSchema;
+export const campaignStatusSchema = z.enum(['DRAFT', 'IN_REVIEW', 'APPROVED', 'QUEUED', 'ARCHIVED']);
+export const campaignInputSchema = z.object({ name: z.string().trim().min(1, 'Campaign name is required').max(160), description: z.string().trim().max(2000).optional() });
+export const campaignFilterSchema = z.object({ search: z.string().trim().max(200).optional(), status: campaignStatusSchema.optional() });
+export const campaignVariantInputSchema = z.object({ campaignId: campaignIdSchema, draftId: draftIdSchema, label: z.string().trim().min(1, 'Variant label is required').max(100), sortOrder: z.number().int().min(0).max(1000).optional(), enabled: z.boolean().optional() });
+export const campaignVariantUpdateSchema = z.object({ variantId: campaignVariantIdSchema, label: z.string().trim().min(1, 'Variant label is required').max(100).optional(), sortOrder: z.number().int().min(0).max(1000).optional(), enabled: z.boolean().optional() });
+export const campaignPlanItemInputSchema = z.object({ campaignId: campaignIdSchema, variantId: campaignVariantIdSchema, accountId: accountIdSchema, groupId: groupIdSchema, scheduledAt: z.string().datetime().refine((value) => value.endsWith('Z'), 'Schedule must be a UTC ISO timestamp.').optional(), sortOrder: z.number().int().min(0).max(1000).optional() });
+export const commitCampaignSchema = z.object({ campaignId: campaignIdSchema, freshnessToken: z.string().trim().min(1, 'Freshness token is required') });
+
 export type CreateAccountData = z.infer<typeof createAccountSchema>;
 export type UpdateAccountData = z.infer<typeof updateAccountSchema>;

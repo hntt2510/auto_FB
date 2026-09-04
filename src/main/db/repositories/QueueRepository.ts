@@ -3,13 +3,13 @@ import type { QueueBatchAction, QueueBatchRescheduleInput, QueueFilter, QueueIte
 
 export type QueueMediaRecord = { id: string; type: MediaType; originalName: string; storedName: string; localPath: string; mimeType?: string; fileSize: number; sortOrder: number };
 export type QueueRecord = Omit<QueueItem, 'media' | 'draftId' | 'accountId' | 'groupId'> & { draftId?: string; accountId?: string; groupId?: string; snapshotHash: string; media: QueueMediaRecord[] };
-export type QueueInsert = { id: string; draftId: string; accountId: string; groupId: string; draftTitle: string; body: string; linkUrl?: string; accountName: string; groupName: string; groupUrl: string; snapshotHash: string; scheduledAt?: string; media: QueueMediaRecord[]; createdAt: string };
-type QueueRow = { id: string; draft_id: string | null; account_id: string | null; group_id: string | null; draft_title_snapshot: string; body_snapshot: string; link_url_snapshot: string | null; account_name_snapshot: string; group_name_snapshot: string; group_url_snapshot: string; snapshot_hash: string; status: QueueStatus; scheduled_at: string | null; execution_token: string | null; lease_started_at: string | null; attention_reason: string | null; submitted_at: string | null; completed_at: string | null; created_at: string; updated_at: string };
+export type QueueInsert = { id: string; draftId: string; accountId: string; groupId: string; draftTitle: string; body: string; linkUrl?: string; accountName: string; groupName: string; groupUrl: string; snapshotHash: string; scheduledAt?: string; campaignId?: string; campaignVariantId?: string; media: QueueMediaRecord[]; createdAt: string };
+type QueueRow = { id: string; draft_id: string | null; account_id: string | null; group_id: string | null; draft_title_snapshot: string; body_snapshot: string; link_url_snapshot: string | null; account_name_snapshot: string; group_name_snapshot: string; group_url_snapshot: string; snapshot_hash: string; status: QueueStatus; scheduled_at: string | null; execution_token: string | null; lease_started_at: string | null; attention_reason: string | null; submitted_at: string | null; completed_at: string | null; campaign_id: string | null; campaign_variant_id: string | null; created_at: string; updated_at: string };
 type QueueMediaRow = { queue_item_id: string; media_id: string; type: MediaType; original_name: string; stored_name: string; local_path: string; mime_type: string | null; file_size: number; sort_order: number };
 
 function mapMedia(row: QueueMediaRow): QueueMediaRecord { return { id: row.media_id, type: row.type, originalName: row.original_name, storedName: row.stored_name, localPath: row.local_path, mimeType: row.mime_type ?? undefined, fileSize: row.file_size, sortOrder: row.sort_order }; }
 function mapRow(row: QueueRow, media: QueueMediaRecord[] = []): QueueRecord {
-  return { id: row.id, draftId: row.draft_id ?? undefined, accountId: row.account_id ?? undefined, groupId: row.group_id ?? undefined, draftTitle: row.draft_title_snapshot, body: row.body_snapshot, linkUrl: row.link_url_snapshot ?? undefined, accountName: row.account_name_snapshot, groupName: row.group_name_snapshot, groupUrl: row.group_url_snapshot, status: row.status, scheduledAt: row.scheduled_at ?? undefined, attentionReason: row.attention_reason ?? undefined, submittedAt: row.submitted_at ?? undefined, completedAt: row.completed_at ?? undefined, media, snapshotHash: row.snapshot_hash, createdAt: row.created_at, updatedAt: row.updated_at };
+  return { id: row.id, draftId: row.draft_id ?? undefined, accountId: row.account_id ?? undefined, groupId: row.group_id ?? undefined, draftTitle: row.draft_title_snapshot, body: row.body_snapshot, linkUrl: row.link_url_snapshot ?? undefined, accountName: row.account_name_snapshot, groupName: row.group_name_snapshot, groupUrl: row.group_url_snapshot, status: row.status, scheduledAt: row.scheduled_at ?? undefined, attentionReason: row.attention_reason ?? undefined, submittedAt: row.submitted_at ?? undefined, completedAt: row.completed_at ?? undefined, campaignId: row.campaign_id ?? undefined, campaignVariantId: row.campaign_variant_id ?? undefined, media, snapshotHash: row.snapshot_hash, createdAt: row.created_at, updatedAt: row.updated_at };
 }
 
 export class QueueRepository {
@@ -35,11 +35,11 @@ export class QueueRepository {
 
   insertBatch(items: QueueInsert[]): QueueRecord[] {
     this.db.transaction(() => {
-      const insert = this.db.prepare(`INSERT INTO queue_items (id, draft_id, account_id, group_id, draft_title_snapshot, body_snapshot, link_url_snapshot, account_name_snapshot, group_name_snapshot, group_url_snapshot, snapshot_hash, status, scheduled_at, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?)`);
+      const insert = this.db.prepare(`INSERT INTO queue_items (id, draft_id, account_id, group_id, draft_title_snapshot, body_snapshot, link_url_snapshot, account_name_snapshot, group_name_snapshot, group_url_snapshot, snapshot_hash, status, scheduled_at, campaign_id, campaign_variant_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?)`);
       const mediaInsert = this.db.prepare('INSERT INTO queue_item_media (queue_item_id, media_id, type, original_name, mime_type, file_size, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)');
       for (const item of items) {
-        insert.run(item.id, item.draftId, item.accountId, item.groupId, item.draftTitle, item.body, item.linkUrl ?? null, item.accountName, item.groupName, item.groupUrl, item.snapshotHash, item.scheduledAt ?? null, item.createdAt, item.createdAt);
+        insert.run(item.id, item.draftId, item.accountId, item.groupId, item.draftTitle, item.body, item.linkUrl ?? null, item.accountName, item.groupName, item.groupUrl, item.snapshotHash, item.scheduledAt ?? null, item.campaignId ?? null, item.campaignVariantId ?? null, item.createdAt, item.createdAt);
         for (const media of item.media) mediaInsert.run(item.id, media.id, media.type, media.originalName, media.mimeType ?? null, media.fileSize, media.sortOrder);
       }
     })();

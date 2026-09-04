@@ -35,18 +35,42 @@ describe('workspace persistence', () => {
   }));
 
   it('creates workspace tables with foreign keys and survives reopen', () => withDatabase((db) => {
-    expect(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all()).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }]);
+    expect(db.prepare('SELECT version FROM schema_migrations ORDER BY version').all()).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }, { version: 5 }, { version: 6 }, { version: 7 }, { version: 8 }]);
     expect(db.pragma('foreign_keys')).toEqual([{ foreign_keys: 1 }]);
-    for (const table of ['groups', 'group_tags', 'account_groups', 'drafts', 'media_assets', 'draft_media', 'queue_items', 'queue_item_media', 'publish_attempts', 'publish_attempt_events', 'publish_receipts', 'account_publish_blocks', 'publish_reconciliations', 'selector_probes', 'publish_preflights', 'account_onboarding_tasks', 'manual_sessions', 'account_sessions']) {
+    for (const table of ['groups', 'group_tags', 'account_groups', 'drafts', 'media_assets', 'draft_media', 'queue_items', 'queue_item_media', 'publish_attempts', 'publish_attempt_events', 'publish_receipts', 'account_publish_blocks', 'publish_reconciliations', 'selector_probes', 'publish_preflights', 'account_onboarding_tasks', 'manual_sessions', 'account_sessions', 'campaigns', 'campaign_variants', 'campaign_plan_items']) {
       expect(db.prepare('SELECT name FROM sqlite_master WHERE type = \'table\' AND name = ?').get(table)).toEqual({ name: table });
     }
   }));
 
-  it('removes only the reverted Warmup schema-8 tables from an existing workspace', () => withDatabase((db) => {
-    db.exec('CREATE TABLE account_warmup_progress (id TEXT PRIMARY KEY); CREATE TABLE warmup_execution_logs (id TEXT PRIMARY KEY);'); db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)').run(8, new Date().toISOString());
-    runMigrations(db);
-    expect(db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get()).toEqual({ version: 7 }); expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'account_warmup_progress'").get()).toBeUndefined(); expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'warmup_execution_logs'").get()).toBeUndefined();
-  }));
+  it('removes only the reverted Warmup schema-8 tables from an existing workspace and migrates to campaign workspace 8', () => {
+    const root = mkdtempSync(join(tmpdir(), 'fb-warmup-schema8-'));
+    const path = join(root, 'warmup.db');
+    const db = new Database(path);
+    try {
+      // Run migrations up to 7 manually
+      db.exec(`
+        CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
+        CREATE TABLE accounts (id TEXT PRIMARY KEY, name TEXT NOT NULL, profile_name TEXT NOT NULL, profile_directory TEXT NOT NULL, updated_at TEXT NOT NULL);
+        CREATE TABLE groups (id TEXT PRIMARY KEY, name TEXT NOT NULL, url TEXT NOT NULL, normalized_url TEXT NOT NULL UNIQUE, updated_at TEXT NOT NULL);
+        CREATE TABLE drafts (id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, updated_at TEXT NOT NULL);
+        CREATE TABLE queue_items (id TEXT PRIMARY KEY);
+        CREATE TABLE account_warmup_progress (id TEXT PRIMARY KEY);
+        CREATE TABLE warmup_execution_logs (id TEXT PRIMARY KEY);
+      `);
+      const insert = db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)');
+      for (let v = 1; v <= 8; v++) insert.run(v, new Date().toISOString());
+
+      runMigrations(db);
+
+      expect(db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get()).toEqual({ version: 8 });
+      expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'account_warmup_progress'").get()).toBeUndefined();
+      expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'warmup_execution_logs'").get()).toBeUndefined();
+      expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'campaigns'").get()).toEqual({ name: 'campaigns' });
+    } finally {
+      db.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
   it('migrates existing and new accounts to NEW onboarding without changing prior records', () => withDatabase((db) => {
     const accounts = new AccountRepository(db); const now = new Date().toISOString(); const id = randomUUID();
@@ -63,9 +87,9 @@ describe('workspace persistence', () => {
   it('applies migration 6 defaults to an account created under schema 5', () => {
     const root = mkdtempSync(join(tmpdir(), 'fb-schema5-')); const path = join(root, 'schema5.db'); const db = new Database(path);
     try {
-      db.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL); CREATE TABLE accounts (id TEXT PRIMARY KEY, updated_at TEXT NOT NULL); CREATE TABLE groups (id TEXT PRIMARY KEY); INSERT INTO accounts (id, updated_at) VALUES ('legacy-account', '2026-01-01T00:00:00.000Z');");
+      db.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL); CREATE TABLE accounts (id TEXT PRIMARY KEY, updated_at TEXT NOT NULL); CREATE TABLE groups (id TEXT PRIMARY KEY); CREATE TABLE drafts (id TEXT PRIMARY KEY); CREATE TABLE queue_items (id TEXT PRIMARY KEY); INSERT INTO accounts (id, updated_at) VALUES ('legacy-account', '2026-01-01T00:00:00.000Z');");
       const insert = db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)'); for (let version = 1; version <= 5; version++) insert.run(version, '2026-01-01T00:00:00.000Z');
-      runMigrations(db); expect(db.prepare("SELECT onboarding_status, onboarding_started_at FROM accounts WHERE id = 'legacy-account'").get()).toEqual({ onboarding_status: 'NEW', onboarding_started_at: null }); expect(db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get()).toEqual({ version: 7 });
+      runMigrations(db); expect(db.prepare("SELECT onboarding_status, onboarding_started_at FROM accounts WHERE id = 'legacy-account'").get()).toEqual({ onboarding_status: 'NEW', onboarding_started_at: null }); expect(db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get()).toEqual({ version: 8 });
     } finally { db.close(); rmSync(root, { recursive: true, force: true }); }
   });
 

@@ -74,6 +74,15 @@ h1, h2, p { margin: 0; } h1 { font-size: 20px; letter-spacing: -.02em; } h2 { fo
 .eligibility-card { display: grid; grid-template-columns: 1fr 1fr auto; align-items: center; gap: 18px; } .eligibility-card h3 { margin: 0 0 4px; } .eligibility-card ul { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; color: #94a3b8; font-size: 12px; } .eligibility-card li.ok { color: #86efac; }
 .history-row { padding: 10px 0; border-top: 1px solid #202d41; } .history-row code { color: #7dd3fc; } .optional-checklist summary { color: #bae6fd; font-weight: 700; cursor: pointer; } .optional-checklist[open] summary { margin-bottom: 14px; }
 .status-active { color: #86efac; background: #14532d; } .status-completed { color: #86efac; background: #14532d; } .status-interrupted { color: #fca5a5; background: #7f1d1d; }
+.status-approved, .status-current { color: #86efac; background: #14532d; } .status-in_review { color: #fde68a; background: #713f12; } .status-queued { color: #7dd3fc; background: #164e63; } .status-stale { color: #fca5a5; background: #7f1d1d; } .status-not_approved { color: #cbd5e1; background: #334155; }
+.campaign-section { margin-top: 24px; padding-top: 16px; border-top: 1px solid #202d41; }
+.campaign-section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.campaign-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
+.campaign-table th, .campaign-table td { padding: 8px 12px; text-align: left; border-bottom: 1px solid #202d41; }
+.campaign-table th { color: #94a3b8; font-weight: 600; }
+.simulation-box { background: #0f172a; border: 1px solid #1e293b; border-radius: 8px; padding: 16px; margin-top: 12px; }
+.simulation-stats { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
+.simulation-stat-pill { background: #1e293b; padding: 6px 12px; border-radius: 6px; font-size: 12px; }
 @media (max-width: 1050px) { .session-health-grid { grid-template-columns: repeat(2, 1fr); } .eligibility-card { grid-template-columns: 1fr; } }
 @media (max-width: 1100px) { .topbar, .content { padding-left: 24px; padding-right: 24px; } .notice { margin-left: 24px; margin-right: 24px; } }
 @media (max-width: 900px) { .sidebar { width: 190px; min-width: 190px; } .stat-grid { grid-template-columns: repeat(2, 1fr); } .dashboard-grid { grid-template-columns: 1fr; } .split-pane { grid-template-columns: 220px minmax(0, 1fr); } .settings-grid { grid-template-columns: 1fr; } }

@@ -12,7 +12,8 @@ function fixture(error: PublishingError) {
   const attempt = { id: '44444444-4444-4444-8444-444444444444', queueItemId: item.id, accountId: item.accountId, groupId: item.groupId, attemptNumber: 1, status: 'STARTING', diagnosticAvailable: false, startedAt: new Date().toISOString(), createdAt: new Date().toISOString(), events: [], irreversibleReached: error.afterSubmit };
   const attempts = { isBlocked: vi.fn(() => false), claim: vi.fn(() => ({ token: 'lease', attempt })), addEvent: vi.fn(), setAttemptStatus: vi.fn(), blockAccount: vi.fn(), createReceipt: vi.fn(), finalizeNeedsAttention: vi.fn(), finalizeFailure: vi.fn(), finalizeSuccess: vi.fn(), finalizeSubmission: vi.fn(), finalizeUnknown: vi.fn(), attempts: vi.fn(() => [{ ...attempt, irreversibleReached: error.afterSubmit }]), getAttempt: vi.fn(() => ({ ...attempt, irreversibleReached: error.afterSubmit })), setDiagnostic: vi.fn() };
   const accounts = { get: vi.fn(() => ({ id: item.accountId, name: 'FB01', profileDirectory: 'C:/profiles/fb01', proxyEnabled: true })), setHealth: vi.fn(), setProxyTest: vi.fn() }; const groups = { get: vi.fn(() => ({ id: item.groupId, active: true })), assignments: vi.fn(() => [{ id: item.accountId }]) }; const profiles = { assertControlledDirectory: vi.fn() }; const browser = { withAccountPage: vi.fn(async (_id: string, callback: (page: object) => Promise<unknown>) => callback({})) }; const publisher = { publish: vi.fn(async (): Promise<{ result: 'UNKNOWN'; evidence: string }> => { throw error; }) }; const diagnostics = { capture: vi.fn(async () => undefined) }; const audit = { add: vi.fn() };
-  const executor = new PublishExecutor(queue as never, attempts as never, accounts as never, groups as never, profiles as never, browser as never, publisher as never, diagnostics as never, audit as never, vi.fn()); return { executor, queue, attempts, accounts, diagnostics, publisher };
+  const readiness = { setSelectorVersion: vi.fn(), evaluate: vi.fn(async () => ({ ready: true, preflightId: 'pf-fixture' })) };
+  const executor = new PublishExecutor(queue as never, attempts as never, accounts as never, groups as never, profiles as never, browser as never, publisher as never, diagnostics as never, audit as never, vi.fn(), readiness as never); return { executor, queue, attempts, accounts, diagnostics, publisher };
 }
 
 describe('PublishExecutor safety boundary', () => {
@@ -192,6 +193,28 @@ describe('PublishExecutor just-in-time readiness evaluation', () => {
     expect(harness.publisher.preflight).not.toHaveBeenCalled();
     expect(harness.attempts.claim).not.toHaveBeenCalled();
     expect(harness.publisher.publish).not.toHaveBeenCalled();
+  });
+
+  it('fails closed with LIVE_READINESS_FAILED when readiness service is missing in LIVE mode even with canary off', async () => {
+    const value = fixture(new PublishingError('SUBMIT_FAILED', 'Should not reach publisher.'));
+    const unreadyExecutor = new PublishExecutor(
+      value.queue as never,
+      value.attempts as never,
+      value.accounts as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      value.publisher as never,
+      value.diagnostics as never,
+      {} as never,
+      vi.fn(),
+      undefined
+    );
+    await expect(unreadyExecutor.execute(item.id, { ...settings, canaryMode: false })).rejects.toMatchObject({
+      code: 'LIVE_READINESS_FAILED'
+    });
+    expect(value.attempts.claim).not.toHaveBeenCalled();
+    expect(value.publisher.publish).not.toHaveBeenCalled();
   });
 });
 

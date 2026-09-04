@@ -85,7 +85,21 @@ export class PublishingService {
   async evaluateLiveReadiness(queueId: string): Promise<LiveReadiness> { const item = this.rawQueue(queueId); if (!this.readiness) return { ready: false, reasons: ['PREFLIGHT_MISSING'] }; this.readiness.setSelectorVersion(this.executor.selectorVersion); return this.readiness.evaluate(item, this.settings.get()); }
   armScheduler(acknowledgeOverdue = false): PublishingEngineStatus { try { this.scheduler.arm(acknowledgeOverdue); } catch (error) { const message = error instanceof Error ? error.message : 'Scheduler could not be armed.'; const lower = message.toLowerCase(); throw new AppError(lower.includes('canary') ? 'CANARY_LIMIT' : lower.includes('overdue') ? 'OVERDUE_BACKLOG_ACK_REQUIRED' : 'SCHEDULER_INVALID_STATE', message); } this.coordinator.resumeAccepting(); this.auditSafe(undefined, 'PUBLISH_SCHEDULER_ARMED', 'Scheduler armed for this application session.'); this.notifySafe(); return this.status(); }
   disarmScheduler(): PublishingEngineStatus { this.scheduler.disarm(); this.auditSafe(undefined, 'PUBLISH_SCHEDULER_DISARMED', 'Scheduler disarmed.'); this.notifySafe(); return this.status(); }
-  async stopPublishing(): Promise<PublishingEngineStatus> { this.scheduler.disarm(); await this.coordinator.stopAndDrain(20000); this.auditSafe(undefined, 'PUBLISHING_STOPPED', 'Publishing stopped and scheduler disarmed.'); this.notifySafe(); return this.status(); }
+  async stopPublishing(): Promise<PublishingEngineStatus> {
+    this.scheduler.disarm();
+    try {
+      const drained = await this.coordinator.stopAndDrain(20_000);
+      if (!drained) {
+        throw new AppError('PUBLISHING_STOPPED', 'Publishing operations did not drain before the safety timeout.');
+      }
+      this.auditSafe(undefined, 'PUBLISHING_STOPPED', 'Publishing stopped and scheduler disarmed.');
+      this.notifySafe();
+      return this.status();
+    } catch (error) {
+      this.notifySafe();
+      throw error instanceof AppError ? error : new AppError('PUBLISHING_STOPPED', 'Publishing drain failed while stopping active operations.');
+    }
+  }
   async stopAfterCurrent(): Promise<PublishingEngineStatus> {
     const schedulerStopping = this.scheduler.runtimeState() === 'ARMED';
     if (!schedulerStopping && !this.coordinator.isBusy()) throw new AppError('PUBLISHING_STOPPED', 'No controlled publishing batch is active.');

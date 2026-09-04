@@ -31,10 +31,13 @@ export class FacebookPublisher {
     return this.adapter.submit(page, composer, baseline, item.groupUrl, () => milestone('SUBMITTING'), (event, detail) => milestone(event, detail));
   }
 
-  async preflight(page: Page, item: QueueRecord, fillContent = false, settings?: PublishingSettings, captureDiagnostic?: PreflightDiagnosticCapture): Promise<PreflightResult> {
+  async preflight(page: Page, item: QueueRecord, fillContent = false, settings?: PublishingSettings, captureDiagnostic?: PreflightDiagnosticCapture, signal?: AbortSignal): Promise<PreflightResult> {
+    this.assertNotCancelled(signal);
     if (settings && item.media.some((asset) => asset.type === 'VIDEO') && (!Number.isInteger(settings.videoUploadTimeoutSeconds) || settings.videoUploadTimeoutSeconds < 60)) throw new PublishingError('MEDIA_UPLOAD_TIMEOUT', 'Video readiness timeout is invalid.');
     const prepared = await this.mediaUploader.prepare(item);
+    this.assertNotCancelled(signal);
     const result = await this.adapter.preflight(page, item, fillContent, captureDiagnostic);
+    this.assertNotCancelled(signal);
     const mediaRequired = item.media.length > 0; const mediaInputFound = result.probe.mediaInput.status === 'FOUND';
     const mediaReport = { ...prepared.report, items: prepared.report.items.map((item) => ({ ...item, facebookMediaInput: mediaRequired ? mediaInputFound ? 'FOUND' as const : 'MISSING' as const : 'NOT_TESTED' as const })) };
     return { ...result.probe, queueItemId: item.id, snapshotHash: item.snapshotHash, accountReady: result.probe.session.status === 'FOUND', groupOpened: result.probe.group.status === 'FOUND', composerFound: result.probe.composerTrigger.status === 'FOUND', textboxFound: result.probe.composerTextbox.status === 'FOUND', mediaInputFound, mediaRequired, mediaValidated: mediaReport.ready, mediaReport, postButtonFound: result.probe.postButton.status === 'FOUND', passed: result.probe.status === 'FOUND' && mediaReport.ready && (!mediaRequired || mediaInputFound), filledContent: result.filledContent };

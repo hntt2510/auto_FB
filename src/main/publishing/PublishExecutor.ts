@@ -25,20 +25,19 @@ export class PublishExecutor {
   async execute(queueItemId: string, settings: PublishingSettings, signal?: AbortSignal, shouldStop?: () => boolean): Promise<ExecutionOutcome> {
     const before = this.queue.get(queueItemId); if (!before || before.status !== 'PENDING' || !before.accountId || settings.executionMode !== 'LIVE') return { started: false };
     if (signal?.aborted || shouldStop?.()) return { started: false };
+    if (!this.readiness) throw new AppError('LIVE_READINESS_FAILED', 'Live readiness service is unavailable. Run a fresh preflight first.');
+    this.readiness.setSelectorVersion(this.publisher.selectorsVersion);
     if (settings.canaryMode === true) {
-      if (!this.readiness) throw new AppError('LIVE_READINESS_FAILED', 'Live canary readiness is unavailable. Run a fresh preflight first.');
-      this.readiness.setSelectorVersion(this.publisher.selectorsVersion);
       const live = await this.readiness.evaluate(before, settings);
       if (!live.ready) throw new AppError('LIVE_READINESS_FAILED', 'Live canary is not ready: ' + live.reasons.join(', ') + '.');
-    } else if (this.readiness) {
-      this.readiness.setSelectorVersion(this.publisher.selectorsVersion);
+    } else {
       let live = await this.readiness.evaluate(before, settings);
       if (!live.ready) {
         const onlyRecoverable = live.reasons.length > 0 && live.reasons.every((r) => RECOVERABLE_PREFLIGHT_REASONS.has(r));
         if (onlyRecoverable) {
           if (signal?.aborted || shouldStop?.()) return { started: false };
           try {
-            await this.preflight(before, settings, true);
+            await this.preflight(before, settings, true, signal);
           } catch {
             // Failure will be captured by re-evaluating readiness below
           }
@@ -87,12 +86,13 @@ export class PublishExecutor {
     } finally { this.notifySafe(); }
   }
 
-  async preflight(item: QueueRecord, settings: PublishingSettings, fillContent = false): Promise<PreflightResult> {
+  async preflight(item: QueueRecord, settings: PublishingSettings, fillContent = false, signal?: AbortSignal): Promise<PreflightResult> {
+    if (signal?.aborted) throw new PublishingError('EXECUTION_CANCELLED', 'Publishing execution was cancelled.');
     void settings;
     const account = item.accountId ? this.accounts.get(item.accountId) : undefined; const group = item.groupId ? this.groups.get(item.groupId) : undefined;
     if (!account || !group || !group.active || !item.accountId || !item.groupId) throw new PublishingError('GROUP_UNAVAILABLE', 'The account/group target is no longer available.');
     this.profiles.assertControlledDirectory(account.profileDirectory);
-    const result = await this.browser.withAccountPage(account.id, (page) => this.publisher.preflight(page, item, fillContent, settings, async (activePage, status) => this.diagnostics.capturePreflight(activePage, item.id, status)));
+    const result = await this.browser.withAccountPage(account.id, (page) => this.publisher.preflight(page, item, fillContent, settings, async (activePage, status) => this.diagnostics.capturePreflight(activePage, item.id, status), signal));
     this.attempts.recordSelectorProbe(result);
     const preflight = { ...result, filledContent: fillContent ? Boolean(result.contentObserved) : false };
     this.attempts.recordPreflight(preflight); this.notifySafe(); return preflight;

@@ -8,9 +8,10 @@ function harness(drain: () => Promise<boolean>) {
     beginStopping: vi.fn(() => { state = 'STOPPING'; }),
     completeStopping: vi.fn(() => { state = 'DISARMED'; reason = 'STOP_AFTER_CURRENT'; }),
     failStopping: vi.fn((value: SchedulerStopReason) => { state = 'DISARMED'; reason = value; }),
-    runtimeState: vi.fn(() => state), reason: vi.fn(() => reason), isArmed: vi.fn(() => state === 'ARMED'), isRunning: vi.fn(() => true), completedThisSession: vi.fn(() => 0), preview: vi.fn(() => ({ dueJobs: 0, overdueJobs: 0, accountsInvolved: 0, groupsInvolved: 0, executionMode: 'LIVE', canaryMode: false, sessionLimit: 20 })), isTicking: vi.fn(() => false)
+    runtimeState: vi.fn(() => state), reason: vi.fn(() => reason), isArmed: vi.fn(() => state === 'ARMED'), isRunning: vi.fn(() => true), completedThisSession: vi.fn(() => 0), preview: vi.fn(() => ({ dueJobs: 0, overdueJobs: 0, accountsInvolved: 0, groupsInvolved: 0, executionMode: 'LIVE', canaryMode: false, sessionLimit: 20 })), isTicking: vi.fn(() => false),
+    disarm: vi.fn(() => { state = 'DISARMED'; })
   };
-  const coordinator = { stopAfterCurrent: vi.fn(drain), resumeAccepting: vi.fn(), running: vi.fn(() => []) };
+  const coordinator = { stopAfterCurrent: vi.fn(drain), stopAndDrain: vi.fn(drain), resumeAccepting: vi.fn(), running: vi.fn(() => []) };
   const queue = { dueCount: vi.fn(() => 0), get: vi.fn() }; const attempts = { blocks: vi.fn(() => []), recent: vi.fn(() => []), recentProbes: vi.fn(() => []) };
   const settings = { get: vi.fn(() => ({ enabled: true, executionMode: 'LIVE', schedulerIntervalSeconds: 30, maxConcurrentAccounts: 1, videoUploadTimeoutSeconds: 600, maxJobsPerSchedulerSession: 20, canaryMode: false })) };
   const audit = { add: vi.fn() };
@@ -35,5 +36,36 @@ describe('PublishingService stop-after-current recovery', () => {
     const value = harness(async () => { throw new Error('drain exploded'); });
     await expect(value.service.stopAfterCurrent()).rejects.toMatchObject({ code: 'PUBLISHING_STOPPED', message: 'Publishing drain failed while stopping after current work.' });
     expect(value.scheduler.runtimeState()).toBe('DISARMED'); expect(value.scheduler.reason()).toBe('STOP_DRAIN_FAILED'); expect(value.coordinator.resumeAccepting).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('PublishingService stop-publishing recovery', () => {
+  it('disarms scheduler and records audit when stopPublishing drain succeeds', async () => {
+    const value = harness(async () => true);
+    const status = await value.service.stopPublishing();
+    expect(value.scheduler.disarm).toHaveBeenCalled();
+    expect(value.audit.add).toHaveBeenCalledWith(expect.objectContaining({ eventType: 'PUBLISHING_STOPPED' }));
+    expect(status.schedulerState).toBe('DISARMED');
+  });
+
+  it('throws PUBLISHING_STOPPED and does not audit clean stop when stopPublishing drain times out', async () => {
+    const value = harness(async () => false);
+    await expect(value.service.stopPublishing()).rejects.toMatchObject({
+      code: 'PUBLISHING_STOPPED',
+      message: expect.stringMatching(/drain/i)
+    });
+    expect(value.scheduler.disarm).toHaveBeenCalled();
+    expect(value.audit.add).not.toHaveBeenCalled();
+    expect(value.scheduler.runtimeState()).toBe('DISARMED');
+  });
+
+  it('leaves scheduler disarmed and throws when stopPublishing drain throws', async () => {
+    const value = harness(async () => { throw new Error('stop drain exploded'); });
+    await expect(value.service.stopPublishing()).rejects.toMatchObject({
+      code: 'PUBLISHING_STOPPED'
+    });
+    expect(value.scheduler.disarm).toHaveBeenCalled();
+    expect(value.audit.add).not.toHaveBeenCalled();
+    expect(value.scheduler.runtimeState()).toBe('DISARMED');
   });
 });

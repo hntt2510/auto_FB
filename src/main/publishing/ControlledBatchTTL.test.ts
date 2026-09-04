@@ -359,24 +359,45 @@ describe('Controlled batch publishing across TTL (Tests A through L)', () => {
     const harness = createBatchHarness();
     const item1 = makeItem('i1', 'acc1', 'Group1');
     const item2 = makeItem('i2', 'acc1', 'Group2');
+    const item3 = makeItem('i3', 'acc1', 'Group3');
     harness.itemsMap.set(item1.id, item1);
     harness.itemsMap.set(item2.id, item2);
+    harness.itemsMap.set(item3.id, item3);
 
     harness.readinessMap.set(item1.id, { ready: true, reasons: [] });
     harness.readinessMap.set(item2.id, { ready: false, reasons: ['PREFLIGHT_EXPIRED'] });
+    harness.readinessMap.set(item3.id, { ready: true, reasons: [] });
+
+    let preflightStartedResolve!: () => void;
+    const preflightStarted = new Promise<void>((resolve) => { preflightStartedResolve = resolve; });
+    let preflightReleaseResolve!: () => void;
+    const preflightRelease = new Promise<void>((resolve) => { preflightReleaseResolve = resolve; });
 
     harness.publisher.preflight.mockImplementation(async () => {
       harness.preflightCalls.push(item2.id);
-      await harness.coordinator.stopAfterCurrent(1000);
-      harness.readinessMap.set(item2.id, { ready: true, reasons: [] });
-      return { probe: { status: 'FOUND' }, contentObserved: true, filledContent: true };
+      preflightStartedResolve();
+      await preflightRelease;
+      return {
+        probe: { status: 'FOUND', session: { status: 'FOUND' }, group: { status: 'FOUND' }, composerTrigger: { status: 'FOUND' }, composerTextbox: { status: 'FOUND' }, postButton: { status: 'FOUND' }, mediaInput: { status: 'FOUND' } },
+        contentObserved: true,
+        filledContent: true
+      };
     });
 
-    const result = await harness.coordinator.run([item1.id, item2.id], harness.defaultSettings);
+    const runPromise = harness.coordinator.run([item1.id, item2.id, item3.id], harness.defaultSettings);
+
+    await preflightStarted;
+    const drainPromise = harness.coordinator.stopAfterCurrent(5000);
+    preflightReleaseResolve();
+
+    const drained = await drainPromise;
+    expect(drained).toBe(true);
+
+    const result = await runPromise;
 
     expect(harness.publishCalls).toEqual([item1.id]);
     expect(harness.attemptsClaimed).toEqual([item1.id]);
-    expect(result).toEqual({ requested: 2, claimed: 1, completed: 1, skipped: 1 });
+    expect(result).toEqual({ requested: 3, claimed: 1, completed: 1, skipped: 2 });
     expect(harness.coordinator.status()?.state).toBe('INTERRUPTED');
     expect(harness.coordinator.status()?.reason).toBe('STOP_AFTER_CURRENT');
   });
@@ -385,23 +406,45 @@ describe('Controlled batch publishing across TTL (Tests A through L)', () => {
     const harness = createBatchHarness();
     const item1 = makeItem('i1', 'acc1', 'Group1');
     const item2 = makeItem('i2', 'acc1', 'Group2');
+    const item3 = makeItem('i3', 'acc1', 'Group3');
     harness.itemsMap.set(item1.id, item1);
     harness.itemsMap.set(item2.id, item2);
+    harness.itemsMap.set(item3.id, item3);
 
     harness.readinessMap.set(item1.id, { ready: true, reasons: [] });
     harness.readinessMap.set(item2.id, { ready: false, reasons: ['PREFLIGHT_EXPIRED'] });
+    harness.readinessMap.set(item3.id, { ready: true, reasons: [] });
+
+    let preflightStartedResolve!: () => void;
+    const preflightStarted = new Promise<void>((resolve) => { preflightStartedResolve = resolve; });
+    let preflightReleaseResolve!: () => void;
+    const preflightRelease = new Promise<void>((resolve) => { preflightReleaseResolve = resolve; });
 
     harness.publisher.preflight.mockImplementation(async () => {
       harness.preflightCalls.push(item2.id);
-      await harness.coordinator.stopAndDrain(1000);
-      return { probe: { status: 'FOUND' }, contentObserved: true, filledContent: true };
+      preflightStartedResolve();
+      await preflightRelease;
+      return {
+        probe: { status: 'FOUND', session: { status: 'FOUND' }, group: { status: 'FOUND' }, composerTrigger: { status: 'FOUND' }, composerTextbox: { status: 'FOUND' }, postButton: { status: 'FOUND' }, mediaInput: { status: 'FOUND' } },
+        contentObserved: true,
+        filledContent: true
+      };
     });
 
-    const result = await harness.coordinator.run([item1.id, item2.id], harness.defaultSettings);
+    const runPromise = harness.coordinator.run([item1.id, item2.id, item3.id], harness.defaultSettings);
+
+    await preflightStarted;
+    const drainPromise = harness.coordinator.stopAndDrain(5000);
+    preflightReleaseResolve();
+
+    const drained = await drainPromise;
+    expect(drained).toBe(true);
+
+    const result = await runPromise;
 
     expect(harness.publishCalls).toEqual([item1.id]);
     expect(harness.attemptsClaimed).toEqual([item1.id]);
-    expect(result).toEqual({ requested: 2, claimed: 1, completed: 1, skipped: 1 });
+    expect(result).toEqual({ requested: 3, claimed: 1, completed: 1, skipped: 2 });
     expect(harness.coordinator.status()?.state).toBe('INTERRUPTED');
     expect(harness.coordinator.status()?.reason).toBe('PUBLISHING_STOPPED');
   });
@@ -452,5 +495,64 @@ describe('Controlled batch publishing across TTL (Tests A through L)', () => {
     });
     expect(harness.attemptsClaimed).toHaveLength(0);
     expect(harness.publishCalls).toHaveLength(0);
+  });
+
+  it('Regression: LIVE + Canary OFF + missing readiness service fails closed with zero publish', async () => {
+    const harness = createBatchHarness();
+    const item1 = makeItem('i1', 'acc1', 'Group1');
+    harness.itemsMap.set(item1.id, item1);
+
+    const unreadyExecutor = new PublishExecutor(
+      { get: (id: string) => harness.itemsMap.get(id) } as never,
+      harness.attemptsRepo as never,
+      harness.accounts as never,
+      harness.groups as never,
+      { assertControlledDirectory: vi.fn() } as never,
+      {} as never,
+      harness.publisher as never,
+      {} as never,
+      {} as never,
+      vi.fn(),
+      undefined
+    );
+
+    await expect(unreadyExecutor.execute(item1.id, { ...harness.defaultSettings, canaryMode: false })).rejects.toMatchObject({
+      code: 'LIVE_READINESS_FAILED'
+    });
+    expect(harness.attemptsClaimed).toHaveLength(0);
+    expect(harness.publishCalls).toHaveLength(0);
+  });
+
+  it('Regression: forced drain timeout in stopAndDrain returns false without claiming later items', async () => {
+    const harness = createBatchHarness();
+    const item1 = makeItem('i1', 'acc1', 'Group1');
+    const item2 = makeItem('i2', 'acc1', 'Group2');
+    harness.itemsMap.set(item1.id, item1);
+    harness.itemsMap.set(item2.id, item2);
+    harness.readinessMap.set(item1.id, { ready: true, reasons: [] });
+    harness.readinessMap.set(item2.id, { ready: true, reasons: [] });
+
+    // Hold item1 publisher indefinitely
+    let publishStartedResolve!: () => void;
+    const publishStarted = new Promise<void>((resolve) => { publishStartedResolve = resolve; });
+    const neverResolve = new Promise<never>(() => { /* never */ });
+
+    harness.publisher.publish.mockImplementation(async () => {
+      harness.publishCalls.push(item1.id);
+      publishStartedResolve();
+      await neverResolve;
+      return { result: 'VERIFIED_PUBLISHED', postUrl: 'https://fb.com/p/1', evidence: 'OK' };
+    });
+
+    void harness.coordinator.run([item1.id, item2.id], harness.defaultSettings);
+    await publishStarted;
+
+    // Timeout drain quickly (20ms)
+    const drained = await harness.coordinator.stopAndDrain(20);
+    expect(drained).toBe(false);
+
+    // Later item2 was never claimed or published
+    expect(harness.publishCalls).toEqual([item1.id]);
+    expect(harness.attemptsClaimed).toEqual([item1.id]);
   });
 });

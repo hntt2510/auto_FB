@@ -10,17 +10,12 @@ import type { HealthCheckResult, LiveReadiness, PreflightResult, PublishAttempt,
 import type { MediaStorageService } from '@main/services/MediaStorageService';
 import type { PublishCoordinator } from './PublishCoordinator';
 import type { PublishDiagnostics } from './PublishDiagnostics';
-import type { PublishExecutor } from './PublishExecutor';
+import { RECOVERABLE_PREFLIGHT_REASONS, type PublishExecutor } from './PublishExecutor';
 import type { PublishScheduler } from './PublishScheduler';
 import type { PublishingSettingsService } from './PublishingSettingsService';
 import type { LiveReadinessService } from './LiveReadinessService';
 import type { OperationsReportService } from './OperationsReportService';
-
-export const RECOVERABLE_PREFLIGHT_REASONS = new Set<string>([
-  'PREFLIGHT_MISSING',
-  'PREFLIGHT_EXPIRED',
-  'PREFLIGHT_SELECTOR_VERSION_MISMATCH'
-]);
+export { RECOVERABLE_PREFLIGHT_REASONS } from './PublishExecutor';
 
 export class PublishingService {
   constructor(private readonly queue: QueueRepository, private readonly attemptsRepository: PublishRepository, private readonly accounts: AccountRepository, private readonly groups: GroupRepository, private readonly media: MediaStorageService, private readonly executor: PublishExecutor, private readonly coordinator: PublishCoordinator, private readonly scheduler: PublishScheduler, private readonly settings: PublishingSettingsService, private readonly diagnostics: PublishDiagnostics, private readonly audit: AuditLogRepository, private readonly notify: () => void, private readonly readiness?: LiveReadinessService, private readonly report?: OperationsReportService) {}
@@ -131,7 +126,8 @@ export class PublishingService {
     const needPreparation = issues.filter((item) => item.reasons.length > 0 && item.reasons.every((r) => RECOVERABLE_PREFLIGHT_REASONS.has(r))).length;
     const nonRecoverable = issues.filter((item) => item.reasons.some((r) => !RECOVERABLE_PREFLIGHT_REASONS.has(r))).length;
     const canPrepare = nonRecoverable === 0 && needPreparation > 0;
-    const accountCounts = new Map<string, number>(); for (const item of readyItems) if (item.accountId) accountCounts.set(item.accountId, (accountCounts.get(item.accountId) ?? 0) + 1);
+    const estimatableItems = nonRecoverable === 0 ? issues.filter((item) => Boolean(item.accountId)) : readyItems;
+    const accountCounts = new Map<string, number>(); for (const item of estimatableItems) if (item.accountId) accountCounts.set(item.accountId, (accountCounts.get(item.accountId) ?? 0) + 1);
     return { requested: ids.length, ready: readyItems.length, blocked: issues.length - readyItems.length, needPreparation, nonRecoverable, canPrepare, accountCount: new Set(issues.map((item) => item.accountId).filter(Boolean)).size, groupCount: new Set(issues.map((item) => item.groupName).filter(Boolean)).size, batchPacingSeconds: settings.batchPacingSeconds, minimumPacingSeconds: Math.max(0, ...[...accountCounts.values()].map((count) => (count - 1) * settings.batchPacingSeconds)), items: issues };
   }
   private requireQueue(value: string): QueueItem { const item = this.queue.get(this.validId(value)); if (!item) throw new AppError('QUEUE_ITEM_NOT_FOUND', 'Queue item not found.'); return this.publicItem(item); }

@@ -344,4 +344,35 @@ describe('PublishingService batch preparation (Section 18 requirements)', () => 
       code: 'BATCH_LIMIT'
     });
   });
+
+  it('11. batch preview with PREFLIGHT_MISSING items calculates non-zero minimumPacingSeconds based on account groups', async () => {
+    const harness = createHarness();
+    const accId = uuid(999);
+    const id1 = uuid(1);
+    const id2 = uuid(2);
+    const id3 = uuid(3);
+    harness.queueMap.set(id1, makeItem(id1, accId));
+    harness.queueMap.set(id2, makeItem(id2, accId));
+    harness.queueMap.set(id3, makeItem(id3, accId));
+    harness.readinessMap.set(id1, { ready: false, reasons: ['PREFLIGHT_MISSING'] });
+    harness.readinessMap.set(id2, { ready: false, reasons: ['PREFLIGHT_MISSING'] });
+    harness.readinessMap.set(id3, { ready: false, reasons: ['PREFLIGHT_MISSING'] });
+
+    const preview = await harness.service.previewBatch([id1, id2, id3]);
+    expect(preview.ready).toBe(0);
+    expect(preview.needPreparation).toBe(3);
+    expect(preview.nonRecoverable).toBe(0);
+    expect(preview.canPrepare).toBe(true);
+    expect(preview.batchPacingSeconds).toBe(120);
+    // 3 items for same account -> 2 pacing gaps * 120s = 240s
+    expect(preview.minimumPacingSeconds).toBe(240);
+
+    // If an item has non-recoverable reasons, minimumPacingSeconds falls back to ready items (0)
+    harness.readinessMap.set(id3, { ready: false, reasons: ['MEDIA_INVALID'] });
+    const blockedPreview = await harness.service.previewBatch([id1, id2, id3]);
+    expect(blockedPreview.nonRecoverable).toBe(1);
+    expect(blockedPreview.canPrepare).toBe(false);
+    expect(blockedPreview.minimumPacingSeconds).toBe(0);
+  });
 });
+

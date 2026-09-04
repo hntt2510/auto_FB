@@ -95,7 +95,7 @@ export class PublishCoordinator {
       if (!acquired || !this.canStart(batch, lane)) { if (acquired) this.releaseSlot(); this.skip(batch, lane, lane.items.length - lane.index + 1); return; }
       const controller = new AbortController(); this.activeAttemptControllers.set(item.id, controller); lane.current = item; lane.state = 'RUNNING'; batch.state = 'RUNNING'; this.changed();
       try {
-        const outcome = await this.executor.execute(item.id, batch.settings, controller.signal);
+        const outcome = await this.executor.execute(item.id, batch.settings, controller.signal, () => !this.canStart(batch, lane));
         if (!outcome.started) { this.skip(batch, lane, lane.items.length - lane.index + 1); return; }
         batch.result.claimed++; batch.result.completed++; lane.processed++; this.lastAttemptFinishedAt.set(lane.accountId, this.runtime.now());
         if (!canContinueAccountLane(outcome)) { lane.blocked = true; lane.state = 'BLOCKED'; batch.interrupted = true; batch.reason ??= `ACCOUNT_CHAIN_${outcome.finalStatus ?? 'STOPPED'}`; this.skip(batch, lane, lane.items.length - lane.index); return; }

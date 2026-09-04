@@ -13,6 +13,8 @@ import { PublishingError } from './PublishingError';
 import { PublishDiagnostics } from './PublishDiagnostics';
 import type { LiveReadinessService } from './LiveReadinessService';
 
+export const RECOVERABLE_PREFLIGHT_REASONS = new Set(['PREFLIGHT_MISSING', 'PREFLIGHT_EXPIRED', 'PREFLIGHT_SELECTOR_VERSION_MISMATCH']);
+
 export type ExecutionOutcome = { started: boolean; finalStatus?: QueueStatus };
 
 export class PublishExecutor {
@@ -20,14 +22,35 @@ export class PublishExecutor {
 
   get selectorVersion(): string { return this.publisher.selectorsVersion; }
 
-  async execute(queueItemId: string, settings: PublishingSettings, signal?: AbortSignal): Promise<ExecutionOutcome> {
+  async execute(queueItemId: string, settings: PublishingSettings, signal?: AbortSignal, shouldStop?: () => boolean): Promise<ExecutionOutcome> {
     const before = this.queue.get(queueItemId); if (!before || before.status !== 'PENDING' || !before.accountId || settings.executionMode !== 'LIVE') return { started: false };
-    if (settings.canaryMode === true && !this.readiness) throw new AppError('LIVE_READINESS_FAILED', 'Live canary readiness is unavailable. Run a fresh preflight first.');
-    if (settings.canaryMode === true && this.readiness) {
+    if (signal?.aborted || shouldStop?.()) return { started: false };
+    if (settings.canaryMode === true) {
+      if (!this.readiness) throw new AppError('LIVE_READINESS_FAILED', 'Live canary readiness is unavailable. Run a fresh preflight first.');
       this.readiness.setSelectorVersion(this.publisher.selectorsVersion);
       const live = await this.readiness.evaluate(before, settings);
       if (!live.ready) throw new AppError('LIVE_READINESS_FAILED', 'Live canary is not ready: ' + live.reasons.join(', ') + '.');
+    } else if (this.readiness) {
+      this.readiness.setSelectorVersion(this.publisher.selectorsVersion);
+      let live = await this.readiness.evaluate(before, settings);
+      if (!live.ready) {
+        const onlyRecoverable = live.reasons.length > 0 && live.reasons.every((r) => RECOVERABLE_PREFLIGHT_REASONS.has(r));
+        if (onlyRecoverable) {
+          if (signal?.aborted || shouldStop?.()) return { started: false };
+          try {
+            await this.preflight(before, settings, true);
+          } catch {
+            // Failure will be captured by re-evaluating readiness below
+          }
+          if (signal?.aborted || shouldStop?.()) return { started: false };
+          live = await this.readiness.evaluate(before, settings);
+        }
+        if (!live.ready) {
+          throw new AppError('LIVE_READINESS_FAILED', 'Live readiness blocked: ' + live.reasons.join(', ') + '.');
+        }
+      }
     }
+    if (signal?.aborted || shouldStop?.()) return { started: false };
     if (this.attempts.isBlocked(before.accountId)) return { started: false };
     const claim = this.attempts.claim(queueItemId, { executionMode: settings.executionMode, selectorVersion: this.publisher.selectorsVersion }); if (!claim) return { started: false };
     const { token, attempt } = claim; const item = this.queue.get(queueItemId)!; let finalized = false;

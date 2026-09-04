@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { LiveReadiness, LiveReadinessReason, PublishingRunResult, PublishingSettings, QueueStatus } from '@shared/types';
+import type { LiveReadiness, LiveReadinessReason, PublishingSettings, QueueStatus } from '@shared/types';
 import { PublishingService } from './PublishingService';
 import { PublishCoordinator } from './PublishCoordinator';
 

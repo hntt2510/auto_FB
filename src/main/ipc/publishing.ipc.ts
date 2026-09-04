@@ -9,6 +9,8 @@ export function registerPublishingIpc(service: PublishingService, allowedSenderI
     registerAuthorizedHandler('publishing:run', allowedSenderIds, (_event, id: unknown) => service.run(parseOrThrow(queueIdSchema.safeParse(id)))),
     registerAuthorizedHandler('publishing:run-selected', allowedSenderIds, (_event, input: unknown) => service.runSelected(parseOrThrow(publishRunSelectedSchema.safeParse(input)).queueIds)),
     registerAuthorizedHandler('publishing:preview-batch', allowedSenderIds, (_event, input: unknown) => service.previewBatch(parseOrThrow(publishRunSelectedSchema.safeParse(input)).queueIds)),
+    registerAuthorizedHandler('publishing:prepare-batch', allowedSenderIds, (_event, input: unknown) => service.prepareBatch(parseOrThrow(publishRunSelectedSchema.safeParse(input)).queueIds)),
+    registerAuthorizedHandler('publishing:prepare-and-run-batch', allowedSenderIds, (_event, input: unknown) => service.prepareAndRunBatch(parseOrThrow(publishRunSelectedSchema.safeParse(input)).queueIds)),
     registerAuthorizedHandler('publishing:run-due', allowedSenderIds, () => service.runDue()),
     registerAuthorizedHandler('publishing:attempts', allowedSenderIds, (_event, id: unknown) => service.attempts(parseOrThrow(queueIdSchema.safeParse(id)))),
     registerAuthorizedHandler('publishing:retry', allowedSenderIds, (_event, input: unknown) => { const value = parseOrThrow(publishRetrySchema.safeParse(input)); return service.retry(value.queueId, value.acknowledgeDuplicateRisk); }),

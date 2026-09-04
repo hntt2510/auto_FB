@@ -1,7 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import type { QueueRepository, QueueRecord } from '@main/db/repositories/QueueRepository';
 import type { PublishBatchLane, PublishBatchRuntime, PublishBatchSource, PublishingRunResult, PublishingSettings } from '@shared/types';
-import type { PublishExecutor } from './PublishExecutor';
+import type { ExecutionOutcome, PublishExecutor } from './PublishExecutor';
+
+export function canContinueAccountLane(outcome: ExecutionOutcome): boolean {
+  if (!outcome.started) return false;
+  return outcome.finalStatus === 'SUCCEEDED' || outcome.finalStatus === 'SUBMITTED';
+}
 
 export type PublishPacingRuntime = { now: () => number; wait: (milliseconds: number, signal: AbortSignal) => Promise<void> };
 const productionRuntime: PublishPacingRuntime = {
@@ -93,7 +98,7 @@ export class PublishCoordinator {
         const outcome = await this.executor.execute(item.id, batch.settings, controller.signal);
         if (!outcome.started) { this.skip(batch, lane, lane.items.length - lane.index + 1); return; }
         batch.result.claimed++; batch.result.completed++; lane.processed++; this.lastAttemptFinishedAt.set(lane.accountId, this.runtime.now());
-        if (outcome.finalStatus !== 'SUCCEEDED') { lane.blocked = true; lane.state = 'BLOCKED'; batch.interrupted = true; batch.reason ??= `ACCOUNT_CHAIN_${outcome.finalStatus ?? 'STOPPED'}`; this.skip(batch, lane, lane.items.length - lane.index); return; }
+        if (!canContinueAccountLane(outcome)) { lane.blocked = true; lane.state = 'BLOCKED'; batch.interrupted = true; batch.reason ??= `ACCOUNT_CHAIN_${outcome.finalStatus ?? 'STOPPED'}`; this.skip(batch, lane, lane.items.length - lane.index); return; }
       } catch {
         lane.blocked = true; lane.state = 'BLOCKED'; batch.interrupted = true; batch.reason ??= 'ACCOUNT_CHAIN_ERROR'; this.skip(batch, lane, lane.items.length - lane.index + 1); return;
       } finally { this.activeAttemptControllers.delete(item.id); lane.current = undefined; this.releaseSlot(); this.changed(); }

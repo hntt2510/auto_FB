@@ -16,6 +16,12 @@ import type { PublishingSettingsService } from './PublishingSettingsService';
 import type { LiveReadinessService } from './LiveReadinessService';
 import type { OperationsReportService } from './OperationsReportService';
 
+export const RECOVERABLE_PREFLIGHT_REASONS = new Set<string>([
+  'PREFLIGHT_MISSING',
+  'PREFLIGHT_EXPIRED',
+  'PREFLIGHT_SELECTOR_VERSION_MISMATCH'
+]);
+
 export class PublishingService {
   constructor(private readonly queue: QueueRepository, private readonly attemptsRepository: PublishRepository, private readonly accounts: AccountRepository, private readonly groups: GroupRepository, private readonly media: MediaStorageService, private readonly executor: PublishExecutor, private readonly coordinator: PublishCoordinator, private readonly scheduler: PublishScheduler, private readonly settings: PublishingSettingsService, private readonly diagnostics: PublishDiagnostics, private readonly audit: AuditLogRepository, private readonly notify: () => void, private readonly readiness?: LiveReadinessService, private readonly report?: OperationsReportService) {}
 
@@ -28,6 +34,37 @@ export class PublishingService {
   }
   run(queueId: string): Promise<PublishingRunResult> { return this.runMany([this.validId(queueId)]); }
   async previewBatch(queueIds: string[]): Promise<PublishBatchPreview> { return this.batchPreview(queueIds.map((id) => this.validId(id))); }
+  async prepareBatch(queueIds: string[]): Promise<PublishBatchPreview> {
+    const ids = [...new Set(queueIds.map((id) => this.validId(id)))];
+    const settings = this.settings.get();
+    if (ids.length > 20) throw new AppError('BATCH_LIMIT', 'A controlled explicit batch is limited to 20 items.');
+    if (settings.executionMode === 'LIVE' && settings.canaryMode === true && ids.length > 1) throw new AppError('CANARY_LIMIT', 'Canary mode allows one queue item per explicit run.');
+    if (this.coordinator.isBusy()) throw new AppError('PUBLISHING_BUSY', 'A controlled publishing batch is already running.');
+    if (!settings.enabled) throw new AppError('PUBLISH_ENGINE_DISABLED', 'Publishing engine must be enabled.');
+    if (settings.executionMode !== 'LIVE') throw new AppError('INVALID_STATE', 'Batch preparation requires LIVE execution mode.');
+    const initial = await this.batchPreview(ids);
+    const nonRecoverable = initial.items.filter((item) => item.reasons.some((r) => !RECOVERABLE_PREFLIGHT_REASONS.has(r)));
+    if (nonRecoverable.length > 0) {
+      throw new AppError('BATCH_NOT_READY', `Preparation blocked: ${nonRecoverable.map((i) => `${i.accountName ?? i.queueId}: ${i.reasons.filter((r) => !RECOVERABLE_PREFLIGHT_REASONS.has(r)).join(', ')}`).join(' · ')}`);
+    }
+    const needsPreflight = initial.items.filter((item) => item.reasons.some((r) => RECOVERABLE_PREFLIGHT_REASONS.has(r))).map((item) => item.queueId);
+    for (const queueId of needsPreflight) {
+      try {
+        await this.preflight(queueId);
+      } catch {
+        // Individual preflight failure will be captured as blocked in the refreshed batch preview
+      }
+    }
+    return this.batchPreview(ids);
+  }
+  async prepareAndRunBatch(queueIds: string[]): Promise<PublishingRunResult> {
+    const ids = [...new Set(queueIds.map((id) => this.validId(id)))];
+    const preview = await this.prepareBatch(ids);
+    if (preview.blocked > 0) {
+      throw new AppError('BATCH_NOT_READY', `Controlled batch has ${preview.blocked} item(s) that require operator attention.`);
+    }
+    return this.runMany(ids, 'MANUAL');
+  }
   async runSelected(queueIds: string[]): Promise<PublishingRunResult> {
     const ids = [...new Set(queueIds.map((id) => this.validId(id)))]; const settings = this.settings.get();
     if (ids.length > 20) throw new AppError('BATCH_LIMIT', 'A controlled explicit batch is limited to 20 items.');
@@ -90,8 +127,12 @@ export class PublishingService {
       if (!this.readiness) reasons.push('PREFLIGHT_MISSING'); else { this.readiness.setSelectorVersion(this.executor.selectorVersion); const readiness = await this.readiness.evaluate(item, settings); if (!readiness.ready) reasons.push(...readiness.reasons); }
       issues.push({ queueId: item.id, accountId: item.accountId ?? undefined, accountName: item.accountName, groupName: item.groupName, reasons: [...new Set(reasons)] });
     }
-    const readyItems = issues.filter((item) => !item.reasons.length); const accountCounts = new Map<string, number>(); for (const item of readyItems) if (item.accountId) accountCounts.set(item.accountId, (accountCounts.get(item.accountId) ?? 0) + 1);
-    return { requested: ids.length, ready: readyItems.length, blocked: issues.length - readyItems.length, accountCount: new Set(issues.map((item) => item.accountId).filter(Boolean)).size, groupCount: new Set(issues.map((item) => item.groupName).filter(Boolean)).size, batchPacingSeconds: settings.batchPacingSeconds, minimumPacingSeconds: Math.max(0, ...[...accountCounts.values()].map((count) => (count - 1) * settings.batchPacingSeconds)), items: issues };
+    const readyItems = issues.filter((item) => !item.reasons.length);
+    const needPreparation = issues.filter((item) => item.reasons.length > 0 && item.reasons.every((r) => RECOVERABLE_PREFLIGHT_REASONS.has(r))).length;
+    const nonRecoverable = issues.filter((item) => item.reasons.some((r) => !RECOVERABLE_PREFLIGHT_REASONS.has(r))).length;
+    const canPrepare = nonRecoverable === 0 && needPreparation > 0;
+    const accountCounts = new Map<string, number>(); for (const item of readyItems) if (item.accountId) accountCounts.set(item.accountId, (accountCounts.get(item.accountId) ?? 0) + 1);
+    return { requested: ids.length, ready: readyItems.length, blocked: issues.length - readyItems.length, needPreparation, nonRecoverable, canPrepare, accountCount: new Set(issues.map((item) => item.accountId).filter(Boolean)).size, groupCount: new Set(issues.map((item) => item.groupName).filter(Boolean)).size, batchPacingSeconds: settings.batchPacingSeconds, minimumPacingSeconds: Math.max(0, ...[...accountCounts.values()].map((count) => (count - 1) * settings.batchPacingSeconds)), items: issues };
   }
   private requireQueue(value: string): QueueItem { const item = this.queue.get(this.validId(value)); if (!item) throw new AppError('QUEUE_ITEM_NOT_FOUND', 'Queue item not found.'); return this.publicItem(item); }
   private validId(value: string): string { const parsed = queueIdSchema.safeParse(value); if (!parsed.success) throw new AppError('INVALID_REQUEST', 'Invalid identifier.'); return parsed.data; }

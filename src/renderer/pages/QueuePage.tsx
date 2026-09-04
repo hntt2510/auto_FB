@@ -193,10 +193,14 @@ export function QueuePage({ accounts, onError }: Props) {
       return;
     await executeRun(ids);
   }
-  async function executeRun(ids: string[]) {
+  async function executeRun(ids: string[], prepareFirst = false) {
     setBusy(true);
     try {
-      await window.publishApi.runSelected(ids);
+      if (prepareFirst) {
+        await window.publishApi.prepareAndRunBatch(ids);
+      } else {
+        await window.publishApi.runSelected(ids);
+      }
       setSelected(new Set());
       setBatchPreview(undefined);
       setBatchIds([]);
@@ -344,6 +348,7 @@ export function QueuePage({ accounts, onError }: Props) {
             <>
               <button
                 className="secondary"
+                title="Run all checked groups"
                 disabled={busy || canaryBatchBlocked}
                 onClick={() => void runItems(runnable.map((item) => item.id))}
               >
@@ -559,6 +564,26 @@ export function QueuePage({ accounts, onError }: Props) {
           item={detail}
           attempts={attempts}
           reconciliations={reconciliations}
+          pendingDraftCount={
+            detail.draftId
+              ? items.filter(
+                  (i) => i.draftId === detail.draftId && i.status === 'PENDING'
+                ).length
+              : 0
+          }
+          onRunDraftPending={() => {
+            const pendingIds = detail.draftId
+              ? items
+                  .filter(
+                    (i) =>
+                      i.draftId === detail.draftId && i.status === 'PENDING'
+                  )
+                  .map((i) => i.id)
+              : [];
+            if (pendingIds.length > 0) {
+              void runItems(pendingIds);
+            }
+          }}
           onClose={() => {
             setDetail(undefined);
             setAttempts([]);
@@ -600,12 +625,24 @@ export function QueuePage({ accounts, onError }: Props) {
         <ActionDialog
           title="Run controlled batch"
           message={`Run ${batchPreview.requested} selected queue items? Accounts: ${batchPreview.accountCount}. Groups: ${batchPreview.groupCount}. Pacing: ${batchPreview.batchPacingSeconds} sec between posts/account. Minimum pacing time: ${formatBatchDuration(batchPreview.minimumPacingSeconds)}.`}
-          confirmLabel="Run controlled batch"
-          confirmDisabled={batchPreview.blocked > 0}
+          confirmLabel={batchPreview.canPrepare ? "Prepare & Run Batch" : "Run controlled batch"}
+          confirmDisabled={batchPreview.blocked > 0 && !batchPreview.canPrepare}
           onCancel={() => { setBatchPreview(undefined); setBatchIds([]); }}
-          onConfirm={() => executeRun(batchIds)}
+          onConfirm={() => executeRun(batchIds, Boolean(batchPreview.canPrepare))}
         >
-          {batchPreview.blocked > 0 ? <div className="inline-warning">Blocked: {batchPreview.blocked}. Fix or remove every blocked item before starting. {batchPreview.items.filter((item) => item.reasons.length).map((item) => `${item.accountName ?? item.queueId}: ${item.reasons.join(', ')}`).join(' · ')}</div> : <div className="notice success">Ready: {batchPreview.ready} of {batchPreview.requested}. Facebook loading, upload, and verification time are not included in the minimum pacing time.</div>}
+          {batchPreview.canPrepare ? (
+            <div className="notice warning">
+              Preflight: {batchPreview.ready} READY · {batchPreview.needPreparation} NEED PREPARATION.
+            </div>
+          ) : batchPreview.blocked > 0 ? (
+            <div className="inline-warning">
+              Blocked: {batchPreview.blocked}. Fix or remove every blocked item before starting. {batchPreview.items.filter((item) => item.reasons.length).map((item) => `${item.accountName ?? item.queueId}: ${item.reasons.join(', ')}`).join(' · ')}
+            </div>
+          ) : (
+            <div className="notice success">
+              Ready: {batchPreview.ready} of {batchPreview.requested}. Facebook loading, upload, and verification time are not included in the minimum pacing time.
+            </div>
+          )}
         </ActionDialog>
       )}
     </main>
@@ -821,7 +858,12 @@ function QueueActions({
   return (
     <div className="row-actions">
       {item.status === "PENDING" && (
-        <button className="action-button" disabled={busy} onClick={onRun}>
+        <button
+          className="action-button"
+          title="Run this group only"
+          disabled={busy}
+          onClick={onRun}
+        >
           Run
         </button>
       )}
@@ -1036,6 +1078,8 @@ function QueueDetail({
   item,
   attempts,
   reconciliations,
+  pendingDraftCount,
+  onRunDraftPending,
   onClose,
   onDiagnostic,
   onDeleteDiagnostic,
@@ -1043,6 +1087,8 @@ function QueueDetail({
   item: QueueItem;
   attempts: PublishAttempt[];
   reconciliations: ReconciliationRecord[];
+  pendingDraftCount?: number;
+  onRunDraftPending?: () => void;
   onClose: () => void;
   onDiagnostic: (attemptId: string) => void;
   onDeleteDiagnostic: (attemptId: string) => void;
@@ -1166,6 +1212,17 @@ function QueueDetail({
           <div className="muted-block">No attempts yet.</div>
         )}
         <div className="modal-actions">
+          {Boolean(pendingDraftCount && pendingDraftCount > 0 && onRunDraftPending) && (
+            <button
+              className="primary"
+              onClick={() => {
+                onClose();
+                onRunDraftPending!();
+              }}
+            >
+              Run all pending for this draft ({pendingDraftCount})
+            </button>
+          )}
           <button className="secondary" onClick={onClose}>
             Close
           </button>

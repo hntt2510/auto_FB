@@ -34,4 +34,12 @@ describe('Mark Verified dialog', () => {
   it('rejects evidence longer than 500 characters', () => {
     expect(verificationEvidenceError('x'.repeat(501))).toBe('Verification evidence must be 500 characters or fewer.');
   });
+
+  it('verifies QueuePage contains clear distinction titles for single run vs batch run', () => {
+    const source = readFileSync(join(process.cwd(), 'src', 'renderer', 'pages', 'QueuePage.tsx'), 'utf8');
+    expect(source).toContain('title="Run this group only"');
+    expect(source).toContain('title="Run all checked groups"');
+    expect(source).toContain('Prepare & Run Batch');
+    expect(source).toContain('Run all pending for this draft');
+  });
 });

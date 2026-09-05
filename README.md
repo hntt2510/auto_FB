@@ -21,6 +21,8 @@ npm install
 npm run dev
 ```
 
+On Windows, you can also double-click `run.bat` to launch the application directly (or run `./run.bat dev` / `./run.bat pack`).
+
 The install step downloads a local Playwright Chromium for packaging. The development data root is printed once at startup.
 
 Verification and packaging commands:

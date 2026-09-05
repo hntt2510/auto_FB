@@ -63,7 +63,13 @@ const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
-  app.on('second-instance', () => { for (const window of BrowserWindow.getAllWindows()) { if (window.isMinimized()) window.restore(); window.focus(); } });
+  app.on('second-instance', () => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (window.isMinimized()) window.restore();
+      window.show();
+      window.focus();
+    }
+  });
   void app.whenReady().then(async () => {
     const paths = createAppPaths(app.getPath('userData'));
     console.info(`Facebook Account Manager data root: ${paths.dataRoot}`);

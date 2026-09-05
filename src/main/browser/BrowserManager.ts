@@ -221,11 +221,14 @@ export class BrowserManager {
       entry = { context, temporary, closing: false, finalized: false, startupFailure: false };
       this.contexts.set(account.id, entry);
       context.on('close', () => { void this.finalizeClose(account.id, entry!, !entry!.startupFailure); });
-      const page = await this.getPage(context);
-      await page.goto(this.facebookHomeUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
       this.accounts.setOpened(account.id, new Date().toISOString());
       this.auditSafely({ accountId: account.id, eventType: 'BROWSER_STARTED', message: temporary ? 'Persistent browser started for health check.' : 'Persistent browser started.' });
       this.notifySafely();
+      const page = await this.getPage(context);
+      const url = typeof page.url === 'function' ? page.url() : '';
+      if (!url.startsWith(this.facebookHomeUrl) && !url.includes('facebook.com')) {
+        await page.goto(this.facebookHomeUrl, { waitUntil: 'commit', timeout: 45000 });
+      }
       return this.requireAccount(account.id);
     } catch (error) {
       if (entry) {

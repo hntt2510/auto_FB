@@ -90,7 +90,9 @@ export class PublishRepository {
 
   recordPreflight(result: PreflightResult): void {
     const now = result.checkedAt || new Date().toISOString();
-    this.db.prepare('INSERT INTO publish_preflights (id, queue_item_id, account_id, group_id, execution_mode, selector_version, status, details_json, checked_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(randomUUID(), result.queueItemId, result.accountId, result.groupId, 'DRY_RUN', result.selectorVersion, result.passed ? 'PASSED' : result.status === 'AMBIGUOUS' ? 'AMBIGUOUS' : 'FAILED', JSON.stringify(result), now, now);
+    const hasQueueItem = result.queueItemId ? Boolean(this.db.prepare('SELECT 1 FROM queue_items WHERE id = ?').get(result.queueItemId)) : false;
+    const queueItemId = hasQueueItem ? result.queueItemId : null;
+    this.db.prepare('INSERT INTO publish_preflights (id, queue_item_id, account_id, group_id, execution_mode, selector_version, status, details_json, checked_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(randomUUID(), queueItemId, result.accountId, result.groupId, 'DRY_RUN', result.selectorVersion, result.passed ? 'PASSED' : result.status === 'AMBIGUOUS' ? 'AMBIGUOUS' : 'FAILED', JSON.stringify(result), now, now);
   }
 
   latestPreflight(queueItemId: string): { id: string; checkedAt: string; selectorVersion: string; snapshotHash?: string; status: 'PASSED' | 'FAILED' | 'AMBIGUOUS' } | undefined {

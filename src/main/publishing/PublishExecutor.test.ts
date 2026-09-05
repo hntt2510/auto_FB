@@ -216,5 +216,30 @@ describe('PublishExecutor just-in-time readiness evaluation', () => {
     expect(value.attempts.claim).not.toHaveBeenCalled();
     expect(value.publisher.publish).not.toHaveBeenCalled();
   });
+
+  it('records selector probe but skips publish_preflights when probing without an existing queue item', async () => {
+    const harness = liveReadinessFixture({ evaluate: vi.fn() });
+    harness.queue.get.mockReturnValue(undefined as never);
+    harness.publisher.preflight.mockResolvedValueOnce({
+      status: 'FOUND',
+      session: { status: 'FOUND' },
+      group: { status: 'FOUND' },
+      composerTrigger: { status: 'FOUND' },
+      composerTextbox: { status: 'FOUND' },
+      postButton: { status: 'FOUND' },
+      mediaInput: { status: 'FOUND' },
+      warnings: []
+    } as never);
+    const probeItem = {
+      ...item,
+      id: '00000000-0000-4000-8000-000000000099',
+      draftTitle: 'Selector probe',
+      snapshotHash: 'probe'
+    };
+    const result = await harness.executor.probe(probeItem);
+    expect(result.status).toBe('FOUND');
+    expect(harness.attempts.recordSelectorProbe).toHaveBeenCalledWith(expect.objectContaining({ status: 'FOUND' }));
+    expect(harness.attempts.recordPreflight).not.toHaveBeenCalled();
+  });
 });
 

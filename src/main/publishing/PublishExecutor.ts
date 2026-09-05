@@ -95,7 +95,9 @@ export class PublishExecutor {
     const result = await this.browser.withAccountPage(account.id, (page) => this.publisher.preflight(page, item, fillContent, settings, async (activePage, status) => this.diagnostics.capturePreflight(activePage, item.id, status), signal));
     this.attempts.recordSelectorProbe(result);
     const preflight = { ...result, filledContent: fillContent ? Boolean(result.contentObserved) : false };
-    this.attempts.recordPreflight(preflight); this.notifySafe(); return preflight;
+    if (this.queue.get(item.id)) this.attempts.recordPreflight(preflight);
+    this.notifySafe();
+    return preflight;
   }
 
   async probe(item: QueueRecord): Promise<SelectorProbeResult> { const result = await this.preflight(item, { enabled: false, executionMode: 'DRY_RUN', schedulerIntervalSeconds: 30, maxConcurrentAccounts: 1, videoUploadTimeoutSeconds: 60, maxJobsPerSchedulerSession: 20, batchPacingSeconds: 120 }, false); return result; }

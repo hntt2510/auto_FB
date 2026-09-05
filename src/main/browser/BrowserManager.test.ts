@@ -15,10 +15,10 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function makeContext() {
+function makeContext(pageUrl?: string) {
   let closeHandler: (() => void) | undefined;
   let closed = false;
-  const page = { goto: vi.fn(async () => undefined) };
+  const page = { goto: vi.fn(async () => undefined), url: pageUrl !== undefined ? () => pageUrl : undefined };
   const context = {
     pages: () => [page],
     on: vi.fn((_event: string, handler: () => void) => { closeHandler = handler; }),
@@ -103,6 +103,27 @@ describe('BrowserManager lifecycle serialization', () => {
     const runtime = makeContext(); const { manager } = fixture(async () => runtime.context as never); const observer = vi.fn(); manager.setContextCloseObserver(observer);
     await manager.openAccount(accountId); runtime.triggerClose(); await manager.closeAccount(accountId);
     await vi.waitFor(() => expect(observer).toHaveBeenCalledTimes(1)); expect(observer).toHaveBeenCalledWith(accountId);
+  });
+
+  it('marks account as RUNNING and notifies immediately upon context creation before page navigation settles', async () => {
+    const gotoGate = deferred<void>();
+    const runtime = makeContext();
+    runtime.page.goto = vi.fn(async () => gotoGate.promise);
+    const { manager, accounts } = fixture(async () => runtime.context as never);
+    const opening = manager.openAccount(accountId);
+    await vi.waitFor(() => expect(accounts.setOpened).toHaveBeenCalledTimes(1));
+    expect(accounts.get().status).toBe('RUNNING');
+    gotoGate.resolve();
+    await opening;
+    await manager.closeAccount(accountId);
+  });
+
+  it('skips page.goto if the restored browser page is already on Facebook', async () => {
+    const runtime = makeContext('https://www.facebook.com/');
+    const { manager } = fixture(async () => runtime.context as never);
+    await manager.openAccount(accountId);
+    expect(runtime.page.goto).not.toHaveBeenCalled();
+    await manager.closeAccount(accountId);
   });
 
   it('waits for a pending launch before closeAll clears locks', async () => {

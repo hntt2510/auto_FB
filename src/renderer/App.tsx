@@ -200,7 +200,12 @@ export default function App() {
             <h1>Facebook Account Manager</h1>
           </div>
           <div className="topbar-meta">
-            {accounts.filter((account) => account.status === "RUNNING").length}{" "}
+            {
+              accounts.filter(
+                (account) =>
+                  account.status === "RUNNING" || account.status === "STARTING",
+              ).length
+            }{" "}
             browser session(s) active
           </div>
         </header>

@@ -33,3 +33,4 @@ playwright/.cache/
 .playwright/
 *.png
 *.har
+*.log

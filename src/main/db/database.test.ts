@@ -162,4 +162,41 @@ describe('workspace persistence', () => {
     accounts.insert({ id: accountId, name: 'Rollback', profileName: 'rollback', profileDirectory: join(tmpdir(), 'rollback'), proxyEnabled: false, createdAt: now, updatedAt: now }); const group = groups.insert(randomUUID(), { name: 'Rollback Group', url: 'https://facebook.com/groups/rollback', tags: [], active: true }, now); groups.replaceAssignments(group.id, [accountId]); const draft = drafts.insert(randomUUID(), { title: 'Rollback', body: 'Body' }, now); const id = randomUUID(); queue.insertBatch([{ id, draftId: draft.id, accountId, groupId: group.id, draftTitle: draft.title, body: draft.body, accountName: 'Rollback', groupName: group.name, groupUrl: group.normalizedUrl, snapshotHash: 'rollback-hash', createdAt: now, media: [] }]); const claim = publishing.claim(id)!;
     expect(() => publishing.finalizeSuccess(id, claim.token, randomUUID(), group.normalizedUrl, 'https://www.facebook.com/groups/rollback/posts/1', 'bad attempt')).toThrow(); expect(queue.get(id)?.status).toBe('RUNNING'); expect(publishing.attempts(id)[0].status).toBe('STARTING'); expect(db.prepare('SELECT COUNT(*) AS count FROM publish_receipts').get()).toEqual({ count: 0 });
   }));
+
+  it('records selector probes and preflights with unpersisted queue IDs without foreign key violations', () => withDatabase((db) => {
+    const accounts = new AccountRepository(db); const groups = new GroupRepository(db); const publishing = new PublishRepository(db); const now = new Date().toISOString();
+    const accountId = randomUUID();
+    accounts.insert({ id: accountId, name: 'Probe', profileName: 'probe', profileDirectory: join(tmpdir(), 'probe'), proxyEnabled: false, createdAt: now, updatedAt: now });
+    const group = groups.insert(randomUUID(), { name: 'Probe Group', url: 'https://facebook.com/groups/probe', tags: [], active: true }, now);
+    const probe = publishing.recordSelectorProbe({
+      accountId,
+      groupId: group.id,
+      selectorVersion: 'v1',
+      status: 'FOUND',
+      session: { status: 'FOUND' },
+      group: { status: 'FOUND' },
+      composerTrigger: { status: 'FOUND' },
+      composerTextbox: { status: 'FOUND' },
+      mediaInput: { status: 'FOUND' },
+      postButton: { status: 'FOUND' },
+      uploadBusy: { status: 'NOT_TESTED' },
+      approvalSignal: { status: 'NOT_TESTED' },
+      acceptanceSignal: { status: 'NOT_TESTED' },
+      checkedAt: now,
+      warnings: []
+    });
+    expect(probe.id).toBeDefined();
+    expect(publishing.recentProbes(5)).toHaveLength(1);
+    expect(() => publishing.recordPreflight({
+      ...probe,
+      queueItemId: randomUUID(),
+      accountReady: true,
+      groupOpened: true,
+      composerFound: true,
+      textboxFound: true,
+      postButtonFound: true,
+      passed: true,
+      filledContent: false
+    })).not.toThrow();
+  }));
 });

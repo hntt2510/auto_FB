@@ -11,7 +11,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "node scripts/test-with-abi.cjs",
-    "build": "electron-vite build && electron-builder --win nsis dir",
+    "build": "electron-vite build && electron-builder --win nsis dir --publish never",
     "postinstall": "electron-builder install-app-deps && cross-env PLAYWRIGHT_BROWSERS_PATH=0 playwright install chromium"
   },
   "dependencies": {

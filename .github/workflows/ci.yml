@@ -22,5 +22,10 @@ jobs:
         name: Lint
       - run: node scripts/test-with-abi.cjs
         name: Test
-      - run: npx electron-vite build
-        name: Build
+      - run: npm run build
+        name: Build & Package
+      - name: Verify Package Artifacts
+        run: |
+          node -e "const fs = require('fs'); if (!fs.existsSync('release/win-unpacked/Facebook Account Manager.exe')) throw new Error('release/win-unpacked/Facebook Account Manager.exe does not exist');"
+      - name: Generate Release Manifest
+        run: node scripts/release-manifest.mjs

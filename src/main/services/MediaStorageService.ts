@@ -81,7 +81,7 @@ export class MediaStorageService {
     const root = resolve(this.root); mkdirSync(root, { recursive: true });
     const info = lstatSync(root);
     if (info.isSymbolicLink() || !info.isDirectory()) throw new AppError('INVALID_PROFILE_PATH', 'Managed media root must be a regular directory.');
-    const real = realpathSync.native(root);
+    const real = realpathSync(root);
     if (process.platform === 'win32' ? real.toLowerCase() !== root.toLowerCase() : real !== root) throw new AppError('INVALID_PROFILE_PATH', 'Managed media root cannot redirect outside application data.');
     return root;
   }

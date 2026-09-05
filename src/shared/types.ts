@@ -462,7 +462,7 @@ export type BackupInfo = { id: string; kind: BackupKind; createdAt: string; size
 export type StorageUsage = { database: number; profiles: number; media: number; diagnostics: number; backups: number; calculatedAt: string };
 export type OrphanMediaScan = { candidateIds: string[]; candidateCount: number; totalBytes: number; scannedAt: string };
 export type AboutInfo = { appName: string; appVersion: string; databaseSchema: number; selectorVersion: string; electronVersion: string; playwrightVersion: string };
-export type DatabaseIntegrityReport = { integrityOk: boolean; integrityDetail: string; foreignKeyViolations: number; schemaVersion: number; expectedSchemaVersion: number; expectedTables: string[]; missingTables: string[]; checkedAt: string };
+export type DatabaseIntegrityReport = { integrityOk: boolean; schemaVersionOk: boolean; integrityDetail: string; foreignKeyViolations: number; schemaVersion: number; expectedSchemaVersion: number; expectedTables: string[]; missingTables: string[]; checkedAt: string };
 export type OperationsApi = { history: (filter?: PublishHistoryFilter) => Promise<PublishingHistoryRow[]>; exportHistoryCsv: (filter?: PublishHistoryFilter) => Promise<string | undefined>; listBackups: () => Promise<BackupInfo[]>; createBackup: () => Promise<BackupInfo>; restoreBackup: (backupId: string) => Promise<void>; storageUsage: () => Promise<StorageUsage>; cleanDiagnostics: () => Promise<number>; scanOrphanMedia: () => Promise<OrphanMediaScan>; cleanOrphanMedia: (candidateIds: string[]) => Promise<number>; about: () => Promise<AboutInfo>; integrityCheck: () => Promise<DatabaseIntegrityReport> };
 
 export type CampaignStatus = 'DRAFT' | 'IN_REVIEW' | 'APPROVED' | 'QUEUED' | 'ARCHIVED';

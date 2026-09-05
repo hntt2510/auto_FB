@@ -66,29 +66,43 @@ export function AboutPage({ onError }: { onError: (error: unknown) => void }) {
                 {checking ? "Checking…" : "Run integrity check"}
               </button>
             </div>
-            {integrity && (
-              <dl style={{ marginTop: "0.75rem" }}>
-                <dt>Integrity Status</dt>
-                <dd>
-                  <span className={`status-badge status-${integrity.integrityOk ? "succeeded" : "failed"}`}>
-                    {integrity.integrityOk ? "PASSED" : "FAILED"}
-                  </span>
-                </dd>
-                <dt>SQLite Integrity Check</dt>
-                <dd>{integrity.integrityDetail}</dd>
-                <dt>Foreign Key Violations</dt>
-                <dd>{integrity.foreignKeyViolations}</dd>
-                <dt>Schema Version</dt>
-                <dd>{integrity.schemaVersion} (expected: {integrity.expectedSchemaVersion})</dd>
-                <dt>Missing Tables</dt>
-                <dd>{integrity.missingTables.length ? integrity.missingTables.join(", ") : "None"}</dd>
-                <dt>Checked At</dt>
-                <dd>{new Date(integrity.checkedAt).toLocaleString()}</dd>
-              </dl>
-            )}
+            {integrity && <DatabaseIntegrityView integrity={integrity} />}
           </section>
         </>
       )}
     </main>
+  );
+}
+
+export function DatabaseIntegrityView({ integrity }: { integrity: DatabaseIntegrityReport }) {
+  return (
+    <dl style={{ marginTop: "0.75rem" }}>
+      <dt>Integrity Status</dt>
+      <dd>
+        <span className={`status-badge status-${integrity.integrityOk ? "succeeded" : "failed"}`}>
+          {integrity.integrityOk ? "PASSED" : "FAILED"}
+        </span>
+      </dd>
+      <dt>SQLite Integrity Check</dt>
+      <dd>{integrity.integrityDetail}</dd>
+      <dt>Foreign Key Violations</dt>
+      <dd>{integrity.foreignKeyViolations}</dd>
+      <dt>Schema Version</dt>
+      <dd>
+        {integrity.schemaVersion} (expected: {integrity.expectedSchemaVersion})
+        {integrity.schemaVersionOk !== undefined && (
+          <span
+            style={{ marginLeft: "0.5rem" }}
+            className={`status-badge status-${integrity.schemaVersionOk ? "succeeded" : "failed"}`}
+          >
+            {integrity.schemaVersionOk ? "OK" : "MISMATCH"}
+          </span>
+        )}
+      </dd>
+      <dt>Missing Tables</dt>
+      <dd>{integrity.missingTables.length ? integrity.missingTables.join(", ") : "None"}</dd>
+      <dt>Checked At</dt>
+      <dd>{new Date(integrity.checkedAt).toLocaleString()}</dd>
+    </dl>
   );
 }

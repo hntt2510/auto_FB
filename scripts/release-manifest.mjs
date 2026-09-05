@@ -1,47 +1,73 @@
 /* global process, console */
 import { createHash } from 'node:crypto';
-import { readdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { join, relative } from 'node:path';
+import { readFile, stat, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const RELEASE_DIR = 'release';
-const OUTPUT = join(RELEASE_DIR, 'release-manifest.json');
-
-async function hashFile(path) {
-  const content = await readFile(path);
+export async function hashFile(filePath) {
+  const content = await readFile(filePath);
   return createHash('sha256').update(content).digest('hex');
 }
 
-async function collectFiles(dir, root = dir) {
-  const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
-  const files = [];
-  for (const entry of entries) {
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...await collectFiles(full, root));
-    } else if (entry.isFile() && !entry.name.endsWith('.blockmap') && entry.name !== 'release-manifest.json') {
-      const info = await stat(full);
-      files.push({ path: relative(root, full).replace(/\\/g, '/'), sha256: await hashFile(full), size: info.size });
+export async function computeReleaseManifest({ releaseDir = 'release', packageJsonPath = 'package.json' } = {}) {
+  const pkg = JSON.parse(await readFile(packageJsonPath, 'utf8'));
+  const version = pkg.version;
+  if (!version) {
+    throw new Error(`Package version missing in ${packageJsonPath}`);
+  }
+
+  const expectedArtifacts = [
+    `Facebook Account Manager Setup ${version}.exe`,
+    join('win-unpacked', 'Facebook Account Manager.exe')
+  ];
+
+  const artifacts = [];
+  for (const relPath of expectedArtifacts) {
+    const fullPath = join(releaseDir, relPath);
+    try {
+      const fileStat = await stat(fullPath);
+      if (!fileStat.isFile()) {
+        throw new Error(`Artifact is not a regular file: ${fullPath}`);
+      }
+      const sha256 = await hashFile(fullPath);
+      artifacts.push({
+        path: relPath.replace(/\\/g, '/'),
+        sha256,
+        byteSize: fileStat.size
+      });
+    } catch (err) {
+      if (err.code === 'ENOENT') {
+        throw new Error(`Required release artifact is missing: ${fullPath}`);
+      }
+      throw err;
     }
   }
-  return files;
-}
 
-async function main() {
-  const pkg = JSON.parse(await readFile('package.json', 'utf8'));
-  console.log(`Generating release manifest for v${pkg.version}...`);
-  const files = await collectFiles(RELEASE_DIR);
-  if (files.length === 0) {
-    console.error('No files found in release/. Run electron-builder first.');
-    process.exit(1);
-  }
-  const manifest = {
-    version: pkg.version,
+  return {
+    appVersion: version,
+    version,
     generatedAt: new Date().toISOString(),
-    fileCount: files.length,
-    files: files.sort((a, b) => a.path.localeCompare(b.path))
+    artifacts
   };
-  await writeFile(OUTPUT, JSON.stringify(manifest, null, 2), 'utf8');
-  console.log(`Wrote ${OUTPUT} with ${files.length} file(s).`);
 }
 
-main().catch((error) => { console.error(error); process.exit(1); });
+export async function main() {
+  const releaseDir = process.env.RELEASE_DIR || 'release';
+  console.log(`Generating release manifest from ${releaseDir}...`);
+  const manifest = await computeReleaseManifest({ releaseDir });
+  const outputPath = join(releaseDir, 'release-manifest.json');
+  await writeFile(outputPath, JSON.stringify(manifest, null, 2), 'utf8');
+  console.log(`Wrote release manifest to ${outputPath}:`);
+  for (const a of manifest.artifacts) {
+    console.log(`  - ${a.path} (${a.byteSize} bytes) sha256: ${a.sha256}`);
+  }
+}
+
+const isDirectRun = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+if (isDirectRun) {
+  main().catch((error) => {
+    console.error('Failed to generate release manifest:', error.message);
+    process.exit(1);
+  });
+}
+

@@ -3,6 +3,7 @@ import { LATEST_SCHEMA_VERSION } from '@main/db/migrations';
 
 export type DatabaseIntegrityReport = {
   integrityOk: boolean;
+  schemaVersionOk: boolean;
   integrityDetail: string;
   foreignKeyViolations: number;
   schemaVersion: number;
@@ -43,8 +44,11 @@ export function checkDatabaseIntegrity(db: Database.Database): DatabaseIntegrity
   try { schemaVersion = (db.prepare('SELECT MAX(version) AS version FROM schema_migrations').get() as { version: number | null })?.version ?? 0; } catch { schemaVersion = 0; }
   const existingTables = new Set((db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all() as Array<{ name: string }>).map((row) => row.name));
   const missingTables = EXPECTED_TABLES.filter((table) => !existingTables.has(table));
+  const schemaVersionOk = schemaVersion === LATEST_SCHEMA_VERSION;
+  const integrityOk = integrity === 'ok' && foreignKeys.length === 0 && missingTables.length === 0 && schemaVersionOk;
   return {
-    integrityOk: integrity === 'ok' && foreignKeys.length === 0 && missingTables.length === 0,
+    integrityOk,
+    schemaVersionOk,
     integrityDetail: integrity,
     foreignKeyViolations: foreignKeys.length,
     schemaVersion,

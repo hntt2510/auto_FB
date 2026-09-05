@@ -77,7 +77,7 @@ function withWorkspace(run: (ctx: TestContext, root: string) => void | Promise<v
   }
 }
 
-function createAccountAndGroup(ctx: TestContext, active = true) {
+function createAccountAndGroup(ctx: TestContext, active = true, groupSlug = `marketinggroup-${randomUUID()}`) {
   const accountId = randomUUID();
   const now = new Date().toISOString();
   ctx.accounts.insert({
@@ -92,8 +92,8 @@ function createAccountAndGroup(ctx: TestContext, active = true) {
 
   const groupId = randomUUID();
   ctx.groups.insert(groupId, {
-    name: 'Marketing Group',
-    url: 'https://facebook.com/groups/marketinggroup',
+    name: `Marketing Group ${groupSlug}`,
+    url: `https://facebook.com/groups/${groupSlug}`,
     tags: ['promo'],
     active
   }, now);
@@ -658,5 +658,467 @@ describe('Campaign Workspace V1 (Tests A-Z)', () => {
     // Assert zero browser or publisher invocations
     expect(mockBrowserLaunch).not.toHaveBeenCalled();
     expect(mockPublish).not.toHaveBeenCalled();
+  }));
+
+  // Acceptance Hardening: Stale Approved Recovery Cycle
+  it('Acceptance Hardening 1: stale approved campaign recovery cycle (APPROVED -> Draft edit -> APPROVAL_STALE -> Request Changes -> DRAFT -> Review -> Approve -> CURRENT -> simulate READY, old token rejected)', () => withWorkspace((ctx) => {
+    const { accountId, groupId } = createAccountAndGroup(ctx);
+    const draft = createReadyDraft(ctx);
+    const campaign = ctx.campaignService.create({ name: 'Stale Recovery Campaign' });
+    const variant = ctx.campaignService.addVariant({ campaignId: campaign.id, draftId: draft.id, label: 'Variant A' });
+    ctx.campaignService.addPlanItem({ campaignId: campaign.id, variantId: variant.id, accountId, groupId });
+
+    ctx.campaignService.requestReview(campaign.id);
+    ctx.campaignService.approve(campaign.id);
+
+    // Initial simulation
+    const sim1 = ctx.campaignService.simulate(campaign.id);
+    expect(sim1.status).toBe('READY');
+    const oldFreshnessToken = sim1.freshnessToken;
+
+    // Operator edits Draft -> becomes APPROVAL_STALE
+    ctx.drafts.update(draft.id, { title: 'Updated Title', body: 'New body after approval' });
+    const detailStale = ctx.campaignService.get(campaign.id);
+    expect(detailStale.freshness).toBe('APPROVAL_STALE');
+
+    // Simulation is blocked while stale
+    const simStale = ctx.campaignService.simulate(campaign.id);
+    expect(simStale.status).toBe('BLOCKED');
+    expect(simStale.blockers.some((b) => b.code === 'APPROVAL_STALE')).toBe(true);
+
+    // Operator explicitly requests changes / reopens campaign
+    const reopened = ctx.campaignService.requestChanges(campaign.id);
+    expect(reopened.status).toBe('DRAFT');
+    expect(reopened.variants[0].approvedSnapshotHash).toBeUndefined();
+
+    // Old simulation token cannot be committed
+    expect(() => ctx.campaignService.commitToQueue({ campaignId: campaign.id, freshnessToken: oldFreshnessToken })).toThrowError(/Only APPROVED campaigns/);
+
+    // Operator reviews and approves again
+    ctx.campaignService.requestReview(campaign.id);
+    const reapproved = ctx.campaignService.approve(campaign.id);
+    expect(reapproved.status).toBe('APPROVED');
+    expect(reapproved.freshness).toBe('CURRENT');
+
+    // Attempting to commit with old freshness token from first approval cycle must fail closed
+    expect(() => ctx.campaignService.commitToQueue({ campaignId: campaign.id, freshnessToken: oldFreshnessToken })).toThrowError(/Campaign simulation is stale/);
+
+    // New simulation succeeds
+    const sim2 = ctx.campaignService.simulate(campaign.id);
+    expect(sim2.status).toBe('READY');
+    expect(sim2.freshnessToken).not.toBe(oldFreshnessToken);
+
+    // Can now commit to queue
+    const queued = ctx.campaignService.commitToQueue({ campaignId: campaign.id, freshnessToken: sim2.freshnessToken });
+    expect(queued.length).toBe(1);
+    expect(ctx.campaignService.get(campaign.id).status).toBe('QUEUED');
+  }));
+
+  // Acceptance Hardening: Duplicate Simulation Semantics (A-E)
+  it('Acceptance Hardening 2A: same variant + same account/group/schedule duplicated in plan -> BLOCKED', () => withWorkspace((ctx) => {
+    const { accountId, groupId } = createAccountAndGroup(ctx);
+    const draft = createReadyDraft(ctx);
+    const campaign = ctx.campaignService.create({ name: 'Duplicate Plan Item Test' });
+    const variant = ctx.campaignService.addVariant({ campaignId: campaign.id, draftId: draft.id, label: 'Variant 1' });
+    const schedule = '2026-09-10T10:00:00.000Z';
+    ctx.campaignService.addPlanItem({ campaignId: campaign.id, variantId: variant.id, accountId, groupId, scheduledAt: schedule });
+    ctx.campaignService.addPlanItem({ campaignId: campaign.id, variantId: variant.id, accountId, groupId, scheduledAt: schedule });
+
+    ctx.campaignService.requestReview(campaign.id);
+    ctx.campaignService.approve(campaign.id);
+
+    const sim = ctx.campaignService.simulate(campaign.id);
+    expect(sim.status).toBe('BLOCKED');
+    expect(sim.blockers.some((b) => b.code === 'DUPLICATE_QUEUE_ITEM')).toBe(true);
+
+    expect(() => ctx.campaignService.commitToQueue({ campaignId: campaign.id, freshnessToken: sim.freshnessToken })).toThrowError(/Campaign simulation failed/);
+  }));
+
+  it('Acceptance Hardening 2B: two different variants referencing same Draft + same account/group/schedule -> BLOCKED', () => withWorkspace((ctx) => {
+    const { accountId, groupId } = createAccountAndGroup(ctx);
+    const draft = createReadyDraft(ctx);
+    const campaign = ctx.campaignService.create({ name: 'Two Variants Same Draft Duplicate Test' });
+    const v1 = ctx.campaignService.addVariant({ campaignId: campaign.id, draftId: draft.id, label: 'Variant 1' });
+    const v2 = ctx.campaignService.addVariant({ campaignId: campaign.id, draftId: draft.id, label: 'Variant 2' });
+    const schedule = '2026-09-10T10:00:00.000Z';
+    ctx.campaignService.addPlanItem({ campaignId: campaign.id, variantId: v1.id, accountId, groupId, scheduledAt: schedule });
+    ctx.campaignService.addPlanItem({ campaignId: campaign.id, variantId: v2.id, accountId, groupId, scheduledAt: schedule });
+
+    ctx.campaignService.requestReview(campaign.id);
+    ctx.campaignService.approve(campaign.id);
+
+    const sim = ctx.campaignService.simulate(campaign.id);
+    expect(sim.status).toBe('BLOCKED');
+    expect(sim.blockers.some((b) => b.code === 'DUPLICATE_QUEUE_ITEM')).toBe(true);
+    expect(() => ctx.campaignService.commitToQueue({ campaignId: campaign.id, freshnessToken: sim.freshnessToken })).toThrowError(/Campaign simulation failed/);
+  }));
+
+  it('Acceptance Hardening 2C: same Draft/account/group but different schedule -> allowed', () => withWorkspace((ctx) => {
+    const { accountId, groupId } = createAccountAndGroup(ctx);
+    const draft = createReadyDraft(ctx);
+    const campaign = ctx.campaignService.create({ name: 'Different Schedule Allowed' });
+    const variant = ctx.campaignService.addVariant({ campaignId: campaign.id, draftId: draft.id, label: 'Variant 1' });
+    ctx.campaignService.addPlanItem({ campaignId: campaign.id, variantId: variant.id, accountId, groupId, scheduledAt: '2026-09-10T10:00:00.000Z' });
+    ctx.campaignService.addPlanItem({ campaignId: campaign.id, variantId: variant.id, accountId, groupId, scheduledAt: '2026-09-10T11:00:00.000Z' });
+
+    ctx.campaignService.requestReview(campaign.id);
+    ctx.campaignService.approve(campaign.id);
+
+    const sim = ctx.campaignService.simulate(campaign.id);
+    expect(sim.status).toBe('READY');
+    expect(sim.blockers.length).toBe(0);
+    expect(sim.plannedRows.length).toBe(2);
+  }));
+
+  it('Acceptance Hardening 2D: two genuinely different Draft snapshots -> not duplicate solely because account/group/schedule match', () => withWorkspace((ctx) => {
+    const { accountId, groupId } = createAccountAndGroup(ctx);
+    const draft1 = createReadyDraft(ctx, 'Draft 1', 'First body');
+    const draft2 = createReadyDraft(ctx, 'Draft 2', 'Different unique body content');
+
+    const campaign = ctx.campaignService.create({ name: 'Different Drafts Match' });
+    const v1 = ctx.campaignService.addVariant({ campaignId: campaign.id, draftId: draft1.id, label: 'Variant 1' });
+    const v2 = ctx.campaignService.addVariant({ campaignId: campaign.id, draftId: draft2.id, label: 'Variant 2' });
+    const schedule = '2026-09-10T10:00:00.000Z';
+    ctx.campaignService.addPlanItem({ campaignId: campaign.id, variantId: v1.id, accountId, groupId, scheduledAt: schedule });
+    ctx.campaignService.addPlanItem({ campaignId: campaign.id, variantId: v2.id, accountId, groupId, scheduledAt: schedule });
+
+    ctx.campaignService.requestReview(campaign.id);
+    ctx.campaignService.approve(campaign.id);
+
+    const sim = ctx.campaignService.simulate(campaign.id);
+    expect(sim.blockers.some((b) => b.code === 'DUPLICATE_QUEUE_ITEM')).toBe(false);
+  }));
+
+  it('Acceptance Hardening 2E: final Queue transaction remains authoritative against duplicate collisions', () => withWorkspace((ctx) => {
+    const { accountId, groupId } = createAccountAndGroup(ctx);
+    const draft = createReadyDraft(ctx);
+    const campaign = ctx.campaignService.create({ name: 'Queue DB Constraint Guard' });
+    const variant = ctx.campaignService.addVariant({ campaignId: campaign.id, draftId: draft.id, label: 'V1' });
+    const schedule = '2026-09-10T10:00:00.000Z';
+    ctx.campaignService.addPlanItem({ campaignId: campaign.id, variantId: variant.id, accountId, groupId, scheduledAt: schedule });
+
+    ctx.campaignService.requestReview(campaign.id);
+    ctx.campaignService.approve(campaign.id);
+
+    const sim = ctx.campaignService.simulate(campaign.id);
+    expect(sim.status).toBe('READY');
+
+    // Simulate race: another actor inserts an active duplicate into Queue table before commit
+    const hash = buildSnapshotHash(draft);
+    const now = new Date().toISOString();
+    ctx.queue.insertBatch([{
+      id: randomUUID(),
+      draftId: draft.id,
+      accountId,
+      groupId,
+      draftTitle: draft.title,
+      body: draft.body,
+      accountName: 'Alice',
+      groupName: 'Marketing',
+      groupUrl: 'https://facebook.com/groups/marketinggroup',
+      snapshotHash: hash,
+      scheduledAt: schedule,
+      media: [],
+      createdAt: now
+    }]);
+
+    // Commit must fail closed transactionally
+    expect(() => ctx.campaignService.commitToQueue({ campaignId: campaign.id, freshnessToken: sim.freshnessToken })).toThrow();
+  }));
+
+  // Acceptance Hardening: Permanent Provenance & Deletion Protection (F-J)
+  it('Acceptance Hardening 3F: committed campaign row reaches SUCCEEDED -> Campaign delete still rejected', () => withWorkspace((ctx) => {
+    const { accountId, groupId } = createAccountAndGroup(ctx);
+    const draft = createReadyDraft(ctx);
+    const campaign = ctx.campaignService.create({ name: 'Provenance Succeeded Test' });
+    const variant = ctx.campaignService.addVariant({ campaignId: campaign.id, draftId: draft.id, label: 'V1' });
+    ctx.campaignService.addPlanItem({ campaignId: campaign.id, variantId: variant.id, accountId, groupId });
+
+    ctx.campaignService.requestReview(campaign.id);
+    ctx.campaignService.approve(campaign.id);
+    const sim = ctx.campaignService.simulate(campaign.id);
+    const queueRows = ctx.campaignService.commitToQueue({ campaignId: campaign.id, freshnessToken: sim.freshnessToken });
+
+    // Mark row as SUCCEEDED
+    ctx.db.prepare("UPDATE queue_items SET status = 'SUCCEEDED' WHERE id = ?").run(queueRows[0].id);
+
+    // Delete must be rejected
+    expect(() => ctx.campaignService.delete(campaign.id)).toThrowError(/cannot be deleted/);
+  }));
+
+  it('Acceptance Hardening 3G: Campaign delete rejected for SUBMITTED, FAILED, CANCELLED rows', () => withWorkspace((ctx) => {
+    for (const terminalStatus of ['SUBMITTED', 'FAILED', 'CANCELLED']) {
+      const { accountId, groupId } = createAccountAndGroup(ctx);
+      const draft = createReadyDraft(ctx);
+      const campaign = ctx.campaignService.create({ name: `Delete Test ${terminalStatus}` });
+      const variant = ctx.campaignService.addVariant({ campaignId: campaign.id, draftId: draft.id, label: 'V1' });
+      ctx.campaignService.addPlanItem({ campaignId: campaign.id, variantId: variant.id, accountId, groupId });
+
+      ctx.campaignService.requestReview(campaign.id);
+      ctx.campaignService.approve(campaign.id);
+      const sim = ctx.campaignService.simulate(campaign.id);
+      const queueRows = ctx.campaignService.commitToQueue({ campaignId: campaign.id, freshnessToken: sim.freshnessToken });
+
+      ctx.db.prepare(`UPDATE queue_items SET status = '${terminalStatus}' WHERE id = ?`).run(queueRows[0].id);
+
+      expect(() => ctx.campaignService.delete(campaign.id)).toThrowError(/cannot be deleted/);
+    }
+  }));
+
+  it('Acceptance Hardening 3H: historical Queue row still exposes campaignId + campaignVariantId', () => withWorkspace((ctx) => {
+    const { accountId, groupId } = createAccountAndGroup(ctx);
+    const draft = createReadyDraft(ctx);
+    const campaign = ctx.campaignService.create({ name: 'Historical Expose Test' });
+    const variant = ctx.campaignService.addVariant({ campaignId: campaign.id, draftId: draft.id, label: 'V1' });
+    ctx.campaignService.addPlanItem({ campaignId: campaign.id, variantId: variant.id, accountId, groupId });
+
+    ctx.campaignService.requestReview(campaign.id);
+    ctx.campaignService.approve(campaign.id);
+    const sim = ctx.campaignService.simulate(campaign.id);
+    const queueRows = ctx.campaignService.commitToQueue({ campaignId: campaign.id, freshnessToken: sim.freshnessToken });
+
+    // Transition to terminal SUCCEEDED
+    ctx.db.prepare("UPDATE queue_items SET status = 'SUCCEEDED' WHERE id = ?").run(queueRows[0].id);
+
+    const fetched = ctx.queue.get(queueRows[0].id);
+    expect(fetched?.campaignId).toBe(campaign.id);
+    expect(fetched?.campaignVariantId).toBe(variant.id);
+  }));
+
+  it('Acceptance Hardening 3I: requeue a Campaign-created terminal Queue row preserves campaignId + campaignVariantId', () => withWorkspace((ctx) => {
+    const { accountId, groupId } = createAccountAndGroup(ctx);
+    const draft = createReadyDraft(ctx);
+    const campaign = ctx.campaignService.create({ name: 'Requeue Provenance Test' });
+    const variant = ctx.campaignService.addVariant({ campaignId: campaign.id, draftId: draft.id, label: 'V1' });
+    ctx.campaignService.addPlanItem({ campaignId: campaign.id, variantId: variant.id, accountId, groupId });
+
+    ctx.campaignService.requestReview(campaign.id);
+    ctx.campaignService.approve(campaign.id);
+    const sim = ctx.campaignService.simulate(campaign.id);
+    const queueRows = ctx.campaignService.commitToQueue({ campaignId: campaign.id, freshnessToken: sim.freshnessToken });
+
+    // Set to FAILED so it can be requeued
+    ctx.db.prepare("UPDATE queue_items SET status = 'FAILED' WHERE id = ?").run(queueRows[0].id);
+
+    const newId = randomUUID();
+    const requeued = ctx.queue.requeue(queueRows[0].id, newId, undefined, new Date().toISOString());
+
+    expect(requeued.id).toBe(newId);
+    expect(requeued.campaignId).toBe(campaign.id);
+    expect(requeued.campaignVariantId).toBe(variant.id);
+  }));
+
+  it('Acceptance Hardening 3J: requeue a manual legacy Queue row leaves campaign metadata undefined/null', () => withWorkspace((ctx) => {
+    const { accountId, groupId } = createAccountAndGroup(ctx);
+    const draft = createReadyDraft(ctx);
+    const now = new Date().toISOString();
+    const legacyId = randomUUID();
+
+    // Insert legacy queue row with no campaign metadata
+    ctx.queue.insertBatch([{
+      id: legacyId,
+      draftId: draft.id,
+      accountId,
+      groupId,
+      draftTitle: draft.title,
+      body: draft.body,
+      accountName: 'Alice',
+      groupName: 'Marketing',
+      groupUrl: 'https://facebook.com/groups/marketinggroup',
+      snapshotHash: buildSnapshotHash(draft),
+      media: [],
+      createdAt: now
+    }]);
+
+    ctx.db.prepare("UPDATE queue_items SET status = 'FAILED' WHERE id = ?").run(legacyId);
+
+    const newId = randomUUID();
+    const requeued = ctx.queue.requeue(legacyId, newId, undefined, now);
+
+    expect(requeued.campaignId).toBeUndefined();
+    expect(requeued.campaignVariantId).toBeUndefined();
+  }));
+
+  // Acceptance Hardening: Planner-Aligned Schedule Warnings (K-O)
+  it('Acceptance Hardening 4K: existing PENDING Queue row at 10:00 + campaign row at 10:05 same account -> WARNING', () => withWorkspace((ctx) => {
+    const { accountId, groupId } = createAccountAndGroup(ctx);
+    const draft = createReadyDraft(ctx);
+    const now = new Date().toISOString();
+
+    // Existing PENDING Queue row on same account scheduled at 10:00
+    ctx.queue.insertBatch([{
+      id: randomUUID(),
+      draftId: draft.id,
+      accountId,
+      groupId,
+      draftTitle: draft.title,
+      body: draft.body,
+      accountName: 'Alice',
+      groupName: 'Marketing',
+      groupUrl: 'https://facebook.com/groups/marketinggroup',
+      snapshotHash: buildSnapshotHash(draft),
+      scheduledAt: '2026-09-10T10:00:00.000Z',
+      media: [],
+      createdAt: now
+    }]);
+
+    // Campaign planned row at 10:05 on same account
+    const campaign = ctx.campaignService.create({ name: 'Schedule Conflict Pending Test' });
+    const variant = ctx.campaignService.addVariant({ campaignId: campaign.id, draftId: draft.id, label: 'V1' });
+    ctx.campaignService.addPlanItem({
+      campaignId: campaign.id,
+      variantId: variant.id,
+      accountId,
+      groupId,
+      scheduledAt: '2026-09-10T10:05:00.000Z'
+    });
+
+    const sim = ctx.campaignService.simulate(campaign.id);
+    expect(sim.warnings.some((w) => w.code === 'SCHEDULE_CONFLICT')).toBe(true);
+    // Warnings do NOT block simulation
+    expect(sim.blockers.some((b) => b.code === 'SCHEDULE_CONFLICT')).toBe(false);
+  }));
+
+  it('Acceptance Hardening 4L: existing PAUSED Queue row behaves the same -> WARNING', () => withWorkspace((ctx) => {
+    const { accountId, groupId } = createAccountAndGroup(ctx);
+    const draft = createReadyDraft(ctx);
+    const now = new Date().toISOString();
+    const existingId = randomUUID();
+
+    ctx.queue.insertBatch([{
+      id: existingId,
+      draftId: draft.id,
+      accountId,
+      groupId,
+      draftTitle: draft.title,
+      body: draft.body,
+      accountName: 'Alice',
+      groupName: 'Marketing',
+      groupUrl: 'https://facebook.com/groups/marketinggroup',
+      snapshotHash: buildSnapshotHash(draft),
+      scheduledAt: '2026-09-10T10:00:00.000Z',
+      media: [],
+      createdAt: now
+    }]);
+
+    ctx.db.prepare("UPDATE queue_items SET status = 'PAUSED' WHERE id = ?").run(existingId);
+
+    const campaign = ctx.campaignService.create({ name: 'Schedule Conflict Paused Test' });
+    const variant = ctx.campaignService.addVariant({ campaignId: campaign.id, draftId: draft.id, label: 'V1' });
+    ctx.campaignService.addPlanItem({
+      campaignId: campaign.id,
+      variantId: variant.id,
+      accountId,
+      groupId,
+      scheduledAt: '2026-09-10T10:05:00.000Z'
+    });
+
+    const sim = ctx.campaignService.simulate(campaign.id);
+    expect(sim.warnings.some((w) => w.code === 'SCHEDULE_CONFLICT')).toBe(true);
+  }));
+
+  it('Acceptance Hardening 4M: different account -> no conflict warning', () => withWorkspace((ctx) => {
+    const account1 = createAccountAndGroup(ctx);
+    const account2 = createAccountAndGroup(ctx);
+    const draft = createReadyDraft(ctx);
+    const now = new Date().toISOString();
+
+    // Existing PENDING Queue row on account1 scheduled at 10:00
+    ctx.queue.insertBatch([{
+      id: randomUUID(),
+      draftId: draft.id,
+      accountId: account1.accountId,
+      groupId: account1.groupId,
+      draftTitle: draft.title,
+      body: draft.body,
+      accountName: 'Alice',
+      groupName: 'Marketing',
+      groupUrl: 'https://facebook.com/groups/marketinggroup',
+      snapshotHash: buildSnapshotHash(draft),
+      scheduledAt: '2026-09-10T10:00:00.000Z',
+      media: [],
+      createdAt: now
+    }]);
+
+    // Campaign planned row at 10:05 on account2
+    const campaign = ctx.campaignService.create({ name: 'Different Account No Conflict' });
+    const variant = ctx.campaignService.addVariant({ campaignId: campaign.id, draftId: draft.id, label: 'V1' });
+    ctx.campaignService.addPlanItem({
+      campaignId: campaign.id,
+      variantId: variant.id,
+      accountId: account2.accountId,
+      groupId: account2.groupId,
+      scheduledAt: '2026-09-10T10:05:00.000Z'
+    });
+
+    const sim = ctx.campaignService.simulate(campaign.id);
+    expect(sim.warnings.some((w) => w.code === 'SCHEDULE_CONFLICT')).toBe(false);
+  }));
+
+  it('Acceptance Hardening 4N: outside 15-minute window -> no conflict warning', () => withWorkspace((ctx) => {
+    const { accountId, groupId } = createAccountAndGroup(ctx);
+    const draft = createReadyDraft(ctx);
+    const now = new Date().toISOString();
+
+    // Existing PENDING Queue row on same account scheduled at 10:00
+    ctx.queue.insertBatch([{
+      id: randomUUID(),
+      draftId: draft.id,
+      accountId,
+      groupId,
+      draftTitle: draft.title,
+      body: draft.body,
+      accountName: 'Alice',
+      groupName: 'Marketing',
+      groupUrl: 'https://facebook.com/groups/marketinggroup',
+      snapshotHash: buildSnapshotHash(draft),
+      scheduledAt: '2026-09-10T10:00:00.000Z',
+      media: [],
+      createdAt: now
+    }]);
+
+    // Campaign planned row at 10:30 (30 min difference > 15 min)
+    const campaign = ctx.campaignService.create({ name: 'Outside 15m Window No Conflict' });
+    const variant = ctx.campaignService.addVariant({ campaignId: campaign.id, draftId: draft.id, label: 'V1' });
+    ctx.campaignService.addPlanItem({
+      campaignId: campaign.id,
+      variantId: variant.id,
+      accountId,
+      groupId,
+      scheduledAt: '2026-09-10T10:30:00.000Z'
+    });
+
+    const sim = ctx.campaignService.simulate(campaign.id);
+    expect(sim.warnings.some((w) => w.code === 'SCHEDULE_CONFLICT')).toBe(false);
+  }));
+
+  it('Acceptance Hardening 4O: campaign-vs-campaign plan conflict still warns correctly', () => withWorkspace((ctx) => {
+    const { accountId, groupId } = createAccountAndGroup(ctx);
+    const draft = createReadyDraft(ctx);
+
+    const campaign = ctx.campaignService.create({ name: 'Intra Campaign Schedule Conflict' });
+    const variant = ctx.campaignService.addVariant({ campaignId: campaign.id, draftId: draft.id, label: 'V1' });
+    // Row 1 at 10:00, Row 2 at 10:08 on same account (different groups)
+    const g2Id = randomUUID();
+    ctx.groups.insert(g2Id, { name: 'Group 2', url: 'https://facebook.com/groups/group2', tags: [], active: true }, new Date().toISOString());
+    ctx.groups.replaceAssignments(g2Id, [accountId]);
+
+    ctx.campaignService.addPlanItem({
+      campaignId: campaign.id,
+      variantId: variant.id,
+      accountId,
+      groupId,
+      scheduledAt: '2026-09-10T10:00:00.000Z'
+    });
+    ctx.campaignService.addPlanItem({
+      campaignId: campaign.id,
+      variantId: variant.id,
+      accountId,
+      groupId: g2Id,
+      scheduledAt: '2026-09-10T10:08:00.000Z'
+    });
+
+    const sim = ctx.campaignService.simulate(campaign.id);
+    expect(sim.warnings.some((w) => w.code === 'SCHEDULE_CONFLICT')).toBe(true);
   }));
 });

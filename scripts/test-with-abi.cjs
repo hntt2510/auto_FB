@@ -10,7 +10,7 @@ try {
   const nodeBuild = spawnSync(npm, ['rebuild', 'better-sqlite3'], spawnOptions);
   if (nodeBuild.status !== 0) testExit = nodeBuild.status ?? 1;
   else {
-    const tests = spawnSync(npm, ['exec', '--', 'vitest', 'run'], spawnOptions);
+    const tests = spawnSync(npm, ['exec', '--', 'vitest', 'run', ...process.argv.slice(2)], spawnOptions);
     testExit = tests.status ?? 1;
   }
 } finally {

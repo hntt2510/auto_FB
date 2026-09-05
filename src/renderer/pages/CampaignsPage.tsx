@@ -85,7 +85,14 @@ export function CampaignsPage({ onError, onNavigate }: Props) {
 
   useEffect(() => {
     void loadCampaigns();
-  }, [loadCampaigns]);
+    const unsubscribe = window.campaignApi.onChanged(() => {
+      void loadCampaigns();
+      if (selectedId) {
+        void loadDetail(selectedId);
+      }
+    });
+    return unsubscribe;
+  }, [loadCampaigns, loadDetail, selectedId]);
 
   useEffect(() => {
     if (selectedId) {
@@ -299,6 +306,7 @@ export function CampaignsPage({ onError, onNavigate }: Props) {
     if (!selectedId) return;
     setSimulating(true);
     try {
+      await loadDetail(selectedId);
       const result = await window.campaignApi.simulate(selectedId);
       setSimulation(result);
     } catch (e) {
@@ -448,6 +456,13 @@ export function CampaignsPage({ onError, onNavigate }: Props) {
                       >
                         Commit to Queue…
                       </button>
+                      <button
+                        className={detail.freshness === 'APPROVAL_STALE' ? 'action-button warning' : 'action-button'}
+                        onClick={() => void handleRequestChanges()}
+                        title="Reopen this campaign back to DRAFT to modify variants or targets"
+                      >
+                        {detail.freshness === 'APPROVAL_STALE' ? 'Reopen for Changes' : 'Request Changes'}
+                      </button>
                       <button className="action-button" onClick={() => void handleArchive()}>
                         Archive
                       </button>
@@ -465,6 +480,18 @@ export function CampaignsPage({ onError, onNavigate }: Props) {
                   )}
                 </div>
               </div>
+
+              {detail.status === 'APPROVED' && detail.freshness === 'APPROVAL_STALE' && (
+                <div className="notice warning" style={{ margin: '12px 0' }}>
+                  <strong>Approval Stale</strong>
+                  <span>Underlying draft content or media has changed since approval. Reopen this campaign to review and re-approve before committing to the Queue.</span>
+                  <div style={{ marginTop: '8px' }}>
+                    <button className="primary" onClick={() => void handleRequestChanges()}>
+                      Reopen for Changes
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {commitSuccess && (
                 <div className="notice success" style={{ margin: '12px 0' }}>

@@ -362,6 +362,33 @@ try {
   await page.getByRole("button", { name: /Approve Campaign/i }).click();
   await page.getByText("APPROVED", { exact: true }).first().waitFor();
 
+  // Acceptance Hardening Stale-Approved Recovery Cycle:
+  // 1. Modify the referenced Draft after approval
+  await page.evaluate(async (id) => {
+    return window.draftApi.update(id, {
+      title: "QA Campaign Draft",
+      body: "Modified body text after approval to trigger stale check.",
+    });
+  }, campaignDraft.id);
+
+  // 2. Reload campaign in UI
+  await page.getByText("Summer Launch Campaign").first().click();
+  await page.getByText("Approval Stale").first().waitFor();
+
+  // 3. Simulate to verify APPROVAL_STALE blocker
+  await page.getByRole("button", { name: /Simulate Campaign/i }).click();
+  await page.locator(".simulation-stat-pill").filter({ hasText: "BLOCKED" }).waitFor();
+
+  // 4. Explicitly Reopen for Changes
+  await page.getByRole("button", { name: /Reopen for Changes/i }).first().click();
+  await page.getByText("DRAFT", { exact: true }).first().waitFor();
+
+  // 4. Review and approve again
+  await page.getByRole("button", { name: /Request Review/i }).click();
+  await page.getByText("IN_REVIEW", { exact: true }).first().waitFor();
+  await page.getByRole("button", { name: /Approve Campaign/i }).click();
+  await page.getByText("APPROVED", { exact: true }).first().waitFor();
+
   // Step 11: simulate campaign
   await page.getByRole("button", { name: /Simulate Campaign/i }).click();
 

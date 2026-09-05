@@ -232,6 +232,12 @@ export class CampaignRepository {
     );
   }
 
+  hasQueueItems(campaignId: string): boolean {
+    return Boolean(
+      this.db.prepare('SELECT 1 FROM queue_items WHERE campaign_id = ? LIMIT 1').get(campaignId)
+    );
+  }
+
   isDraftUsed(draftId: string): boolean {
     return Boolean(this.db.prepare('SELECT 1 FROM campaign_variants WHERE draft_id = ? LIMIT 1').get(draftId));
   }

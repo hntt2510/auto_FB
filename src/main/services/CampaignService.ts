@@ -95,8 +95,14 @@ export class CampaignService {
     const validId = this.requireId(id);
     const current = this.requireCampaign(validId);
 
-    if (this.campaigns.hasActiveQueueItems(validId)) {
-      throw new AppError('ENTITY_IN_USE', 'Campaign has active queue items.');
+    if (current.status === 'QUEUED') {
+      throw new AppError('INVALID_STATE', 'Queued campaigns cannot be deleted.');
+    }
+    if (current.status !== 'DRAFT') {
+      throw new AppError('INVALID_STATE', `Campaign in status ${current.status} cannot be deleted. Must be DRAFT.`);
+    }
+    if (this.campaigns.hasQueueItems(validId)) {
+      throw new AppError('ENTITY_IN_USE', 'Campaign has queue items and cannot be deleted.');
     }
 
     this.campaigns.delete(validId);
@@ -125,13 +131,15 @@ export class CampaignService {
     const validId = this.requireId(id);
     const campaign = this.get(validId);
 
-    if (campaign.status !== 'IN_REVIEW') {
-      throw new AppError('INVALID_STATE', `Cannot request changes for campaign in status ${campaign.status}.`);
+    if (campaign.status !== 'IN_REVIEW' && campaign.status !== 'APPROVED') {
+      throw new AppError('INVALID_STATE', `Cannot request changes for campaign in status ${campaign.status}. Must be IN_REVIEW or APPROVED.`);
     }
 
     this.campaigns.clearVariantApprovalHashes(validId);
     this.campaigns.setStatus(validId, 'DRAFT');
-    this.auditSafe('CAMPAIGN_CHANGES_REQUESTED', `Changes requested for campaign ${campaign.name}.`, JSON.stringify({ campaignId: validId }));
+    const auditAction = campaign.status === 'APPROVED' ? 'CAMPAIGN_REOPENED_FOR_CHANGES' : 'CAMPAIGN_CHANGES_REQUESTED';
+    const auditMsg = campaign.status === 'APPROVED' ? `Campaign ${campaign.name} reopened for changes.` : `Changes requested for campaign ${campaign.name}.`;
+    this.auditSafe(auditAction, auditMsg, JSON.stringify({ campaignId: validId, previousStatus: campaign.status }));
     this.notifySafe();
     return this.get(validId);
   }
@@ -356,8 +364,18 @@ export class CampaignService {
       blockers.push({ code: 'NO_PLAN_ITEMS', message: 'Campaign scheduling plan has no target items.' });
     }
 
-    const seenTargets = new Set<string>();
+    const seenQueueKeys = new Set<string>();
     const scheduledByAccount = new Map<string, Array<{ id: string; time: number }>>();
+
+    const existingQueueItems = this.queue.list().filter(
+      (item) => ['PENDING', 'PAUSED'].includes(item.status) && Boolean(item.scheduledAt) && Boolean(item.accountId)
+    );
+    const existingScheduledByAccount = new Map<string, Array<{ id: string; time: number; scheduledAt: string }>>();
+    for (const item of existingQueueItems) {
+      const list = existingScheduledByAccount.get(item.accountId!) ?? [];
+      list.push({ id: item.id, time: new Date(item.scheduledAt!).getTime(), scheduledAt: item.scheduledAt! });
+      existingScheduledByAccount.set(item.accountId!, list);
+    }
 
     for (const item of campaign.planItems) {
       const variant = campaign.variants.find((v) => v.id === item.variantId);
@@ -418,7 +436,10 @@ export class CampaignService {
       const hash = variantHashes.get(variant.id) ?? '';
 
       if (draft && hash) {
-        // Check active queue duplicate
+        const normalizedScheduledAt = item.scheduledAt ? new Date(item.scheduledAt).toISOString() : '';
+        const queueDuplicateKey = `${draft.id}:${hash}:${account.id}:${group.id}:${normalizedScheduledAt}`;
+
+        // Check active queue duplicate against existing queue items
         if (this.queue.hasDuplicate(draft.id, hash, account.id, group.id, item.scheduledAt)) {
           blockers.push({
             code: 'DUPLICATE_QUEUE_ITEM',
@@ -427,20 +448,35 @@ export class CampaignService {
           });
         }
 
-        // Duplicate plan check within the campaign itself
-        const planKey = `${variant.id}:${account.id}:${group.id}:${item.scheduledAt ?? ''}`;
-        if (seenTargets.has(planKey)) {
-          warnings.push({
-            code: 'DUPLICATE_PLAN_TARGET',
-            message: `Plan target repeated for variant "${variant.label}" on "${account.name} -> ${group.name}".`,
+        // Intra-campaign duplicate queue item check
+        if (seenQueueKeys.has(queueDuplicateKey)) {
+          blockers.push({
+            code: 'DUPLICATE_QUEUE_ITEM',
+            message: `Duplicate planned item would create equivalent active queue item for draft "${draft.title}" and target "${account.name} -> ${group.name}".`,
             target: { variantId: item.variantId, accountId: item.accountId, groupId: item.groupId }
           });
+        } else {
+          seenQueueKeys.add(queueDuplicateKey);
         }
-        seenTargets.add(planKey);
 
         // Schedule conflict warning (within 15 minutes for same account)
         if (item.scheduledAt) {
           const time = new Date(item.scheduledAt).getTime();
+
+          // Check against existing PENDING/PAUSED Queue items on same account
+          const existingOnAccount = existingScheduledByAccount.get(account.id) ?? [];
+          for (const existing of existingOnAccount) {
+            if (Math.abs(existing.time - time) <= 15 * 60_000) {
+              warnings.push({
+                code: 'SCHEDULE_CONFLICT',
+                message: `Account "${account.name}" has an existing queue item scheduled within 15 minutes (${existing.scheduledAt}).`,
+                target: { variantId: item.variantId, accountId: item.accountId, groupId: item.groupId }
+              });
+              break;
+            }
+          }
+
+          // Check against intra-campaign planned items on same account
           const list = scheduledByAccount.get(account.id) ?? [];
           for (const prev of list) {
             if (Math.abs(prev.time - time) <= 15 * 60_000) {

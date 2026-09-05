@@ -143,8 +143,8 @@ export class QueueRepository {
       const source = this.db.prepare('SELECT * FROM queue_items WHERE id = ?').get(sourceId) as QueueRow | undefined;
       if (!source || !['SUBMITTED', 'FAILED', 'SUCCEEDED', 'CANCELLED'].includes(source.status)) throw new Error('Only submitted, failed, succeeded, or cancelled queue items can be requeued.');
       if (!source.account_id || !source.group_id) throw new Error('The original target no longer exists.');
-      this.db.prepare(`INSERT INTO queue_items (id, draft_id, account_id, group_id, draft_title_snapshot, body_snapshot, link_url_snapshot, account_name_snapshot, group_name_snapshot, group_url_snapshot, snapshot_hash, status, scheduled_at, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?)`).run(newId, source.draft_id, source.account_id, source.group_id, source.draft_title_snapshot, source.body_snapshot, source.link_url_snapshot, source.account_name_snapshot, source.group_name_snapshot, source.group_url_snapshot, source.snapshot_hash, scheduledAt ?? null, timestamp, timestamp);
+      this.db.prepare(`INSERT INTO queue_items (id, draft_id, account_id, group_id, draft_title_snapshot, body_snapshot, link_url_snapshot, account_name_snapshot, group_name_snapshot, group_url_snapshot, snapshot_hash, status, scheduled_at, campaign_id, campaign_variant_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?)`).run(newId, source.draft_id, source.account_id, source.group_id, source.draft_title_snapshot, source.body_snapshot, source.link_url_snapshot, source.account_name_snapshot, source.group_name_snapshot, source.group_url_snapshot, source.snapshot_hash, scheduledAt ?? null, source.campaign_id ?? null, source.campaign_variant_id ?? null, timestamp, timestamp);
       this.db.prepare(`INSERT INTO queue_item_media (queue_item_id, media_id, type, original_name, mime_type, file_size, sort_order)
         SELECT ?, media_id, type, original_name, mime_type, file_size, sort_order FROM queue_item_media WHERE queue_item_id = ?`).run(newId, sourceId);
     })();

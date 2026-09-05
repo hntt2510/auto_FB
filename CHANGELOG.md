@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.8.0 - Release Candidate
+
+- Added reproducible GitHub Actions CI workflow for Windows runner (`.github/workflows/ci.yml`) covering typecheck, lint, test, and compilation.
+- Added Database Release Integrity Verification service (`DatabaseIntegrityService`) checking `PRAGMA integrity_check`, `PRAGMA foreign_key_check`, schema version (8), and schema table presence, with UI execution in About page.
+- Added Campaign-aware operational traceability: surfaced Campaign name and Variant label in Queue rows, Queue detail modal, History table, and sanitized CSV/JSON exports.
+- Added Schema-8 backup/restore regression coverage proving complete Campaign Workspace entities and queue linkage survive backup and restoration.
+- Extended Release Diagnostics Bundle with OS platform info and campaign provenance while maintaining strict redaction of sensitive credentials.
+- Added Release Artifact Checksum Manifest generator (`scripts/release-manifest.mjs`) calculating SHA-256 digests for release outputs.
+- Added Publishing Invariant Audit test suite (`PublishingInvariantAudit.test.ts`) ensuring `DRY_RUN`, canary mode, and bounded pacing safety defaults.
+- Documented operator-assisted controlled Facebook live-canary checklist (`docs/CANARY_CHECKLIST.md`).
+
 ## Campaign Workspace V1
  
 - Added Campaign Workspace V1 for multi-variant and multi-target campaign planning without duplicating the publishing engine.

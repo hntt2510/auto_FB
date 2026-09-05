@@ -7,8 +7,9 @@ import type { PublishRepository } from '@main/db/repositories/PublishRepository'
 import type { AppPaths } from '@main/db/database';
 import { createManagedBackup, listManagedBackups, validateManagedBackup } from '@main/db/database';
 import type { PublishScheduler } from '@main/publishing/PublishScheduler';
-import type { AboutInfo, BackupInfo, OrphanMediaScan, PublishHistoryFilter, PublishingHistoryRow, StorageUsage } from '@shared/types';
+import type { AboutInfo, BackupInfo, DatabaseIntegrityReport, OrphanMediaScan, PublishHistoryFilter, PublishingHistoryRow, StorageUsage } from '@shared/types';
 import { AppError } from '@main/errors';
+import { checkDatabaseIntegrity } from './DatabaseIntegrityService';
 
 export class OperationsService {
   private lastOrphanScan?: OrphanMediaScan;
@@ -17,8 +18,9 @@ export class OperationsService {
   history(filter: PublishHistoryFilter = {}): PublishingHistoryRow[] { return this.publishing.history(filter); }
   async exportHistoryCsv(filter: PublishHistoryFilter = {}): Promise<string | undefined> {
     const result = await dialog.showSaveDialog({ title: 'Export sanitized publishing history', defaultPath: 'facebook-publish-history.csv', filters: [{ name: 'CSV', extensions: ['csv'] }] }); if (result.canceled || !result.filePath) return undefined;
-    const header = ['timestamp','queue id','account name','group name','draft title','automated result','final status','verification source','error code','post URL']; const rows = this.history(filter).map((row) => [row.timestamp,row.queueId,row.accountName,row.groupName,row.draftTitle,row.automatedResult ?? '',row.finalStatus,row.verificationSource,row.errorCode ?? '',row.postUrl ?? '']); await writeFile(result.filePath, [header, ...rows].map((row) => row.map(csv).join(',')).join('\r\n'), 'utf8'); this.auditSafe('PUBLISH_HISTORY_EXPORTED', `Exported ${rows.length} sanitized history row(s).`); return result.filePath;
+    const header = ['timestamp','queue id','account name','group name','draft title','campaign name','variant label','automated result','final status','verification source','error code','post URL']; const rows = this.history(filter).map((row) => [row.timestamp,row.queueId,row.accountName,row.groupName,row.draftTitle,row.campaignName ?? '',row.campaignVariantLabel ?? '',row.automatedResult ?? '',row.finalStatus,row.verificationSource,row.errorCode ?? '',row.postUrl ?? '']); await writeFile(result.filePath, [header, ...rows].map((row) => row.map(csv).join(',')).join('\r\n'), 'utf8'); this.auditSafe('PUBLISH_HISTORY_EXPORTED', `Exported ${rows.length} sanitized history row(s).`); return result.filePath;
   }
+  integrityCheck(): DatabaseIntegrityReport { return checkDatabaseIntegrity(this.db); }
   listBackups(): BackupInfo[] { return listManagedBackups(this.paths.backups); }
   async createBackup(): Promise<BackupInfo> { const backup = await createManagedBackup(this.db, this.paths.backups, 'MANUAL'); this.auditSafe('DATABASE_BACKUP_CREATED', 'Manual database backup created.'); return backup; }
   async restoreBackup(id: string): Promise<void> {

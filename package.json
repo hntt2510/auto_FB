@@ -1,7 +1,7 @@
 {
   "name": "fb-account-manager",
-  "version": "0.7.0",
-  "description": "Local Facebook account and persistent profile manager",
+  "version": "0.8.0",
+  "description": "Desktop Facebook account and proxy manager with isolated Chrome profiles and canary-safe publishing controls.",
   "main": "out/main/index.js",
   "author": "",
   "license": "MIT",

@@ -42,4 +42,10 @@ describe('Mark Verified dialog', () => {
     expect(source).toContain('Prepare & Run Batch');
     expect(source).toContain('Run all pending for this draft');
   });
+
+  it('verifies QueuePage contains campaign provenance indicators', () => {
+    const source = readFileSync(join(process.cwd(), 'src', 'renderer', 'pages', 'QueuePage.tsx'), 'utf8');
+    expect(source).toContain('campaign-provenance');
+    expect(source).toContain('item.campaignName');
+  });
 });

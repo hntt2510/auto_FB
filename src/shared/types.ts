@@ -313,6 +313,8 @@ export type QueueItem = {
   outcome?: QueueOutcomeSummary;
   campaignId?: string;
   campaignVariantId?: string;
+  campaignName?: string;
+  campaignVariantLabel?: string;
   media: Array<Pick<DraftMedia, 'id' | 'type' | 'originalName' | 'mimeType' | 'fileSize' | 'sortOrder' | 'previewUrl'>>;
   createdAt: string;
   updatedAt: string;
@@ -451,7 +453,7 @@ export type AccountOperationsSummary = { accountId: string; accountName: string;
 export type GroupOperationsSummary = { groupId: string; groupName: string; status: 'ACTIVE' | 'ARCHIVED' | 'NEEDS_ATTENTION'; lastOpened?: string; lastSuccessfulPublish?: string; lastFailedPublish?: string; lastAccountUsed?: string; activeQueueCount: number };
 export type AssignmentMatrix = { accounts: Array<{ id: string; name: string }>; groups: Array<{ id: string; name: string }>; assignments: Array<{ accountId: string; groupId: string }> };
 export type PublishHistoryFilter = { from?: string; to?: string; accountId?: string; groupId?: string; outcome?: string; verificationSource?: 'AUTOMATED' | 'OPERATOR' | 'NONE'; search?: string };
-export type PublishingHistoryRow = { timestamp: string; queueId: string; accountId?: string; groupId?: string; accountName: string; groupName: string; draftTitle: string; automatedResult?: PublishReceiptResult | 'FAILED'; finalStatus: QueueStatus; verificationSource: 'AUTOMATED' | 'OPERATOR' | 'NONE'; reconciliationAction?: ReconciliationAction; errorCode?: string; postUrl?: string };
+export type PublishingHistoryRow = { timestamp: string; queueId: string; accountId?: string; groupId?: string; accountName: string; groupName: string; draftTitle: string; automatedResult?: PublishReceiptResult | 'FAILED'; finalStatus: QueueStatus; verificationSource: 'AUTOMATED' | 'OPERATOR' | 'NONE'; reconciliationAction?: ReconciliationAction; errorCode?: string; postUrl?: string; campaignId?: string; campaignVariantId?: string; campaignName?: string; campaignVariantLabel?: string };
 export type MediaPreparationState = 'VALID' | 'MISSING' | 'INVALID_SIGNATURE' | 'UNSUPPORTED' | 'READY_FOR_UPLOAD' | 'UPLOAD_PENDING';
 export type MediaPreflightItem = { id: string; originalName: string; type: MediaType; sortOrder: number; state: MediaPreparationState; managedPath: boolean; signature: boolean; exists: boolean; facebookMediaInput?: 'FOUND' | 'MISSING' | 'NOT_TESTED'; reason?: string };
 export type MediaPreflightReport = { count: number; ready: boolean; items: MediaPreflightItem[] };
@@ -460,7 +462,8 @@ export type BackupInfo = { id: string; kind: BackupKind; createdAt: string; size
 export type StorageUsage = { database: number; profiles: number; media: number; diagnostics: number; backups: number; calculatedAt: string };
 export type OrphanMediaScan = { candidateIds: string[]; candidateCount: number; totalBytes: number; scannedAt: string };
 export type AboutInfo = { appName: string; appVersion: string; databaseSchema: number; selectorVersion: string; electronVersion: string; playwrightVersion: string };
-export type OperationsApi = { history: (filter?: PublishHistoryFilter) => Promise<PublishingHistoryRow[]>; exportHistoryCsv: (filter?: PublishHistoryFilter) => Promise<string | undefined>; listBackups: () => Promise<BackupInfo[]>; createBackup: () => Promise<BackupInfo>; restoreBackup: (backupId: string) => Promise<void>; storageUsage: () => Promise<StorageUsage>; cleanDiagnostics: () => Promise<number>; scanOrphanMedia: () => Promise<OrphanMediaScan>; cleanOrphanMedia: (candidateIds: string[]) => Promise<number>; about: () => Promise<AboutInfo> };
+export type DatabaseIntegrityReport = { integrityOk: boolean; integrityDetail: string; foreignKeyViolations: number; schemaVersion: number; expectedSchemaVersion: number; expectedTables: string[]; missingTables: string[]; checkedAt: string };
+export type OperationsApi = { history: (filter?: PublishHistoryFilter) => Promise<PublishingHistoryRow[]>; exportHistoryCsv: (filter?: PublishHistoryFilter) => Promise<string | undefined>; listBackups: () => Promise<BackupInfo[]>; createBackup: () => Promise<BackupInfo>; restoreBackup: (backupId: string) => Promise<void>; storageUsage: () => Promise<StorageUsage>; cleanDiagnostics: () => Promise<number>; scanOrphanMedia: () => Promise<OrphanMediaScan>; cleanOrphanMedia: (candidateIds: string[]) => Promise<number>; about: () => Promise<AboutInfo>; integrityCheck: () => Promise<DatabaseIntegrityReport> };
 
 export type CampaignStatus = 'DRAFT' | 'IN_REVIEW' | 'APPROVED' | 'QUEUED' | 'ARCHIVED';
 export type CampaignVariantFreshness = 'CURRENT' | 'STALE' | 'NOT_APPROVED';

@@ -4,12 +4,12 @@ import type { QueueBatchAction, QueueBatchRescheduleInput, QueueFilter, QueueIte
 export type QueueMediaRecord = { id: string; type: MediaType; originalName: string; storedName: string; localPath: string; mimeType?: string; fileSize: number; sortOrder: number };
 export type QueueRecord = Omit<QueueItem, 'media' | 'draftId' | 'accountId' | 'groupId'> & { draftId?: string; accountId?: string; groupId?: string; snapshotHash: string; media: QueueMediaRecord[] };
 export type QueueInsert = { id: string; draftId: string; accountId: string; groupId: string; draftTitle: string; body: string; linkUrl?: string; accountName: string; groupName: string; groupUrl: string; snapshotHash: string; scheduledAt?: string; campaignId?: string; campaignVariantId?: string; media: QueueMediaRecord[]; createdAt: string };
-type QueueRow = { id: string; draft_id: string | null; account_id: string | null; group_id: string | null; draft_title_snapshot: string; body_snapshot: string; link_url_snapshot: string | null; account_name_snapshot: string; group_name_snapshot: string; group_url_snapshot: string; snapshot_hash: string; status: QueueStatus; scheduled_at: string | null; execution_token: string | null; lease_started_at: string | null; attention_reason: string | null; submitted_at: string | null; completed_at: string | null; campaign_id: string | null; campaign_variant_id: string | null; created_at: string; updated_at: string };
+type QueueRow = { id: string; draft_id: string | null; account_id: string | null; group_id: string | null; draft_title_snapshot: string; body_snapshot: string; link_url_snapshot: string | null; account_name_snapshot: string; group_name_snapshot: string; group_url_snapshot: string; snapshot_hash: string; status: QueueStatus; scheduled_at: string | null; execution_token: string | null; lease_started_at: string | null; attention_reason: string | null; submitted_at: string | null; completed_at: string | null; campaign_id: string | null; campaign_variant_id: string | null; campaign_name?: string | null; campaign_variant_label?: string | null; created_at: string; updated_at: string };
 type QueueMediaRow = { queue_item_id: string; media_id: string; type: MediaType; original_name: string; stored_name: string; local_path: string; mime_type: string | null; file_size: number; sort_order: number };
 
 function mapMedia(row: QueueMediaRow): QueueMediaRecord { return { id: row.media_id, type: row.type, originalName: row.original_name, storedName: row.stored_name, localPath: row.local_path, mimeType: row.mime_type ?? undefined, fileSize: row.file_size, sortOrder: row.sort_order }; }
 function mapRow(row: QueueRow, media: QueueMediaRecord[] = []): QueueRecord {
-  return { id: row.id, draftId: row.draft_id ?? undefined, accountId: row.account_id ?? undefined, groupId: row.group_id ?? undefined, draftTitle: row.draft_title_snapshot, body: row.body_snapshot, linkUrl: row.link_url_snapshot ?? undefined, accountName: row.account_name_snapshot, groupName: row.group_name_snapshot, groupUrl: row.group_url_snapshot, status: row.status, scheduledAt: row.scheduled_at ?? undefined, attentionReason: row.attention_reason ?? undefined, submittedAt: row.submitted_at ?? undefined, completedAt: row.completed_at ?? undefined, campaignId: row.campaign_id ?? undefined, campaignVariantId: row.campaign_variant_id ?? undefined, media, snapshotHash: row.snapshot_hash, createdAt: row.created_at, updatedAt: row.updated_at };
+  return { id: row.id, draftId: row.draft_id ?? undefined, accountId: row.account_id ?? undefined, groupId: row.group_id ?? undefined, draftTitle: row.draft_title_snapshot, body: row.body_snapshot, linkUrl: row.link_url_snapshot ?? undefined, accountName: row.account_name_snapshot, groupName: row.group_name_snapshot, groupUrl: row.group_url_snapshot, status: row.status, scheduledAt: row.scheduled_at ?? undefined, attentionReason: row.attention_reason ?? undefined, submittedAt: row.submitted_at ?? undefined, completedAt: row.completed_at ?? undefined, campaignId: row.campaign_id ?? undefined, campaignVariantId: row.campaign_variant_id ?? undefined, campaignName: row.campaign_name ?? undefined, campaignVariantLabel: row.campaign_variant_label ?? undefined, media, snapshotHash: row.snapshot_hash, createdAt: row.created_at, updatedAt: row.updated_at };
 }
 
 export class QueueRepository {
@@ -17,19 +17,19 @@ export class QueueRepository {
 
   list(filter: QueueFilter = {}): QueueRecord[] {
     const conditions: string[] = []; const params: Record<string, string> = {};
-    if (filter.search) { conditions.push('(q.draft_title_snapshot LIKE @search OR q.body_snapshot LIKE @search OR q.account_name_snapshot LIKE @search OR q.group_name_snapshot LIKE @search)'); params.search = `%${filter.search}%`; }
+    if (filter.search) { conditions.push('(q.draft_title_snapshot LIKE @search OR q.body_snapshot LIKE @search OR q.account_name_snapshot LIKE @search OR q.group_name_snapshot LIKE @search OR c.name LIKE @search)'); params.search = `%${filter.search}%`; }
     if (filter.status) { conditions.push('q.status = @status'); params.status = filter.status; }
     if (filter.accountId) { conditions.push('q.account_id = @accountId'); params.accountId = filter.accountId; }
     if (filter.groupId) { conditions.push('q.group_id = @groupId'); params.groupId = filter.groupId; }
     if (filter.from) { conditions.push('q.scheduled_at >= @from'); params.from = filter.from; }
     if (filter.to) { conditions.push('q.scheduled_at <= @to'); params.to = filter.to; }
     const where = conditions.length ? ` WHERE ${conditions.join(' AND ')}` : '';
-    const rows = this.db.prepare(`SELECT q.* FROM queue_items q${where} ORDER BY q.scheduled_at IS NULL, q.scheduled_at ASC, q.created_at DESC LIMIT 1000`).all(params) as QueueRow[];
+    const rows = this.db.prepare(`SELECT q.*, c.name AS campaign_name, cv.label AS campaign_variant_label FROM queue_items q LEFT JOIN campaigns c ON c.id = q.campaign_id LEFT JOIN campaign_variants cv ON cv.id = q.campaign_variant_id${where} ORDER BY q.scheduled_at IS NULL, q.scheduled_at ASC, q.created_at DESC LIMIT 1000`).all(params) as QueueRow[];
     return this.attachLatest(this.attachMedia(rows));
   }
 
   get(id: string): QueueRecord | undefined {
-    const row = this.db.prepare('SELECT * FROM queue_items WHERE id = ?').get(id) as QueueRow | undefined;
+    const row = this.db.prepare('SELECT q.*, c.name AS campaign_name, cv.label AS campaign_variant_label FROM queue_items q LEFT JOIN campaigns c ON c.id = q.campaign_id LEFT JOIN campaign_variants cv ON cv.id = q.campaign_variant_id WHERE q.id = ?').get(id) as QueueRow | undefined;
     return row ? this.attachLatest([mapRow(row, this.media(id))])[0] : undefined;
   }
 
@@ -71,7 +71,7 @@ export class QueueRepository {
   }
 
   due(now: string, limit = 100): QueueRecord[] {
-    const rows = this.db.prepare("SELECT * FROM queue_items WHERE status = 'PENDING' AND scheduled_at IS NOT NULL AND scheduled_at <= ? ORDER BY scheduled_at, created_at LIMIT ?").all(now, limit) as QueueRow[];
+    const rows = this.db.prepare("SELECT q.*, c.name AS campaign_name, cv.label AS campaign_variant_label FROM queue_items q LEFT JOIN campaigns c ON c.id = q.campaign_id LEFT JOIN campaign_variants cv ON cv.id = q.campaign_variant_id WHERE q.status = 'PENDING' AND q.scheduled_at IS NOT NULL AND q.scheduled_at <= ? ORDER BY q.scheduled_at, q.created_at LIMIT ?").all(now, limit) as QueueRow[];
     return this.attachMedia(rows);
   }
 

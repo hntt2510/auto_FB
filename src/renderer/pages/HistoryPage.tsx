@@ -162,6 +162,7 @@ export function HistoryPage({
                   <th>Date</th>
                   <th>Account / Group</th>
                   <th>Draft</th>
+                  <th>Campaign</th>
                   <th>Automated Result</th>
                   <th>Final Status</th>
                   <th>Verification</th>
@@ -177,6 +178,16 @@ export function HistoryPage({
                       <small>{row.groupName}</small>
                     </td>
                     <td>{row.draftTitle}</td>
+                    <td>
+                      {row.campaignName ? (
+                        <>
+                          <strong>{row.campaignName}</strong>
+                          {row.campaignVariantLabel && <small style={{ display: "block", color: "#64748b" }}>{row.campaignVariantLabel}</small>}
+                        </>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
                     <td>{row.automatedResult ?? "—"}</td>
                     <td>
                       <span

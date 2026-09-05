@@ -13,7 +13,8 @@ export function registerOperationsIpc(service: OperationsService, allowedSenderI
     registerAuthorizedHandler('operations:clean-diagnostics', allowedSenderIds, () => service.cleanDiagnostics()),
     registerAuthorizedHandler('operations:scan-orphan-media', allowedSenderIds, () => service.scanOrphanMedia()),
     registerAuthorizedHandler('operations:clean-orphan-media', allowedSenderIds, (_event, input: unknown) => service.cleanOrphanMedia(parseOrThrow(orphanCleanupSchema.safeParse(input)).candidateIds)),
-    registerAuthorizedHandler('operations:about', allowedSenderIds, () => service.about())
+    registerAuthorizedHandler('operations:about', allowedSenderIds, () => service.about()),
+    registerAuthorizedHandler('operations:integrity-check', allowedSenderIds, () => service.integrityCheck())
   ];
   return () => cleanups.forEach((cleanup) => cleanup());
 }

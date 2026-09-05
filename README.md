@@ -207,4 +207,15 @@ Version 0.7.0 adds an operator-controlled production workspace:
   classifications, versions, and validated post URLs only. They never include
   post bodies, proxy credentials, cookies, tokens, session storage, or media.
 
+## Release Candidate 0.8.0
+
+Version 0.8.0 turns the feature-complete application into a verifiable release candidate:
+
+- **Reproducible CI**: GitHub Actions workflow (`.github/workflows/ci.yml`) runs on `windows-latest` validating typecheck, lint, test suite, and bundle compilation.
+- **Database Release Integrity**: `DatabaseIntegrityService` provides automated and on-demand verification of `PRAGMA integrity_check`, `PRAGMA foreign_key_check`, schema versioning, and presence of all 21 schema tables.
+- **Campaign Operational Traceability**: Full campaign provenance (campaign name, variant label) is visible in the Queue table, Queue Detail drawer, History table, and sanitized CSV/JSON exports, with complete backwards compatibility for manual/legacy items.
+- **Schema-8 Backup/Restore Resilience**: Verified end-to-end backup and restoration covering campaign planning entities, approval hashes, and immutable queue linkages.
+- **Release Manifest & Checksums**: `scripts/release-manifest.mjs` generates SHA-256 digests for all distributable artifacts into `release/release-manifest.json`.
+- **Canary Readiness Checklist**: Documented manual test protocol in `docs/CANARY_CHECKLIST.md` for controlled live canary verification before broad release.
+
 See [CHANGELOG.md](CHANGELOG.md) for milestone release notes.

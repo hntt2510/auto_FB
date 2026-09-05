@@ -410,6 +410,12 @@ try {
   assert(queueAfterCommit.length === 3, "Queue row was not created on commit.");
   const committedCampaignItem = queueAfterCommit.find((item) => item.draftTitle === "QA Campaign Draft");
   assert(committedCampaignItem && committedCampaignItem.campaignId, "Committed campaign item missing or unlinked.");
+  assert(committedCampaignItem.campaignName === "Summer Launch Campaign", "Campaign name missing on committed item.");
+  assert(committedCampaignItem.campaignVariantLabel === "Variant A", "Campaign variant label missing on committed item.");
+
+  // Step 15b: verify Campaign provenance visible in Queue UI
+  await open(page, "Queue");
+  await page.locator(".campaign-provenance").filter({ hasText: "Summer Launch Campaign" }).first().waitFor();
 
   // Step 16: verify Planner can see scheduled row when scheduled
   await open(page, "Planner");
@@ -424,12 +430,13 @@ try {
   const exportPaths = { csv: join(userData, "publishing-history.csv"), json: join(userData, "operations-report.json") };
   await first.application.evaluate(({ dialog }, paths) => { let call = 0; dialog.showSaveDialog = async () => ({ canceled: false, filePath: call++ === 0 ? paths.csv : paths.json }); }, exportPaths);
   await page.evaluate(async () => { await window.operationsApi.exportHistoryCsv({}); await window.publishApi.exportReport(); });
-  const csvText = readFileSync(exportPaths.csv, "utf8"); const jsonText = readFileSync(exportPaths.json, "utf8"); assert(csvText.includes("automated result") && csvText.includes("final status"), "CSV export headers are incomplete."); assert(jsonText.includes('"selectorVersion": "2026-08-v4"'), "Diagnostic JSON selector version is missing."); for (const forbidden of ["SHOULD-NOT-EXPORT", "proxy password", "session storage"]) assert(!csvText.includes(forbidden) && !jsonText.includes(forbidden), `Export leaked forbidden content: ${forbidden}`);
+  const csvText = readFileSync(exportPaths.csv, "utf8"); const jsonText = readFileSync(exportPaths.json, "utf8"); assert(csvText.includes("automated result") && csvText.includes("final status") && csvText.includes("campaign name"), "CSV export headers are incomplete."); assert(jsonText.includes('"selectorVersion": "2026-08-v4"') && jsonText.includes('"platform"'), "Diagnostic JSON fields missing."); for (const forbidden of ["SHOULD-NOT-EXPORT", "proxy password", "session storage"]) assert(!csvText.includes(forbidden) && !jsonText.includes(forbidden), `Export leaked forbidden content: ${forbidden}`);
   const maintenance = await page.evaluate(async () => ({
     backup: await window.operationsApi.createBackup(),
     storage: await window.operationsApi.storageUsage(),
     orphan: await window.operationsApi.scanOrphanMedia(),
     about: await window.operationsApi.about(),
+    integrity: await window.operationsApi.integrityCheck(),
     accountOps: await window.accountApi.operations(),
     groupOps: await window.groupApi.operations(),
   }));
@@ -445,7 +452,11 @@ try {
     maintenance.orphan.candidateCount === 0,
     "Unexpected orphan media in clean workspace.",
   );
-  assert(maintenance.about.appVersion === "0.7.0", "About version mismatch.");
+  assert(maintenance.about.appVersion === "0.8.0", "About version mismatch.");
+  assert(maintenance.integrity.integrityOk === true, "Integrity check failed.");
+  assert(maintenance.integrity.schemaVersion === 8, "Integrity schema version mismatch.");
+  assert(maintenance.integrity.foreignKeyViolations === 0, "Integrity check reported FK violations.");
+  assert(maintenance.integrity.missingTables.length === 0, "Integrity check reported missing tables.");
   assert(
     maintenance.accountOps.find((item) => item.accountId === seeded.accountId)?.pendingQueue === 3,
     "Account queue linkage mismatch.",

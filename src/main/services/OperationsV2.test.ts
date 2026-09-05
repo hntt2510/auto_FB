@@ -17,6 +17,7 @@ import { DraftRepository } from "@main/db/repositories/DraftRepository";
 import { GroupRepository } from "@main/db/repositories/GroupRepository";
 import { PublishRepository } from "@main/db/repositories/PublishRepository";
 import { QueueRepository } from "@main/db/repositories/QueueRepository";
+import { CampaignRepository } from "@main/db/repositories/CampaignRepository";
 import { OperationsService } from "./OperationsService";
 import type { PublishScheduler } from "@main/publishing/PublishScheduler";
 import { LATEST_SCHEMA_VERSION } from "@main/db/migrations";
@@ -95,6 +96,7 @@ function setup() {
     publishing,
     accountId,
     group,
+    draft,
     ids,
   };
 }
@@ -211,8 +213,8 @@ describe("Production Operations V2 persistence", () => {
     const restore = vi.fn(async () => undefined);
     const appInfo = {
       appName: "Facebook Account Manager",
-      appVersion: "0.7.0",
-      databaseSchema: 4,
+      appVersion: "0.8.0",
+      databaseSchema: 8,
       selectorVersion: "2026-08-v4",
       electronVersion: "36",
       playwrightVersion: "1.52",
@@ -260,6 +262,100 @@ describe("Production Operations V2 persistence", () => {
       ).toBe(true);
     } finally {
       value.db.close();
+    }
+  });
+
+  it("schema 8 managed backup and restore preserves campaign workspace entities and queue provenance", async () => {
+    const value = setup();
+    const campaigns = new CampaignRepository(value.db);
+    const now = new Date().toISOString();
+    const campaignId = randomUUID();
+    const variantId = randomUUID();
+    const planItemId = randomUUID();
+    const queueItemId = randomUUID();
+
+    // 1. Create campaign, variant with approval hash, plan item, and linked queue item
+    campaigns.insert(campaignId, { name: "Summer Campaign 2026", description: "Summer promo" }, now);
+    campaigns.addVariant(variantId, { campaignId, draftId: value.draft.id, label: "Variant A", sortOrder: 0, enabled: true }, now);
+    campaigns.setVariantApprovalHashes(campaignId, new Map([[variantId, "hash-variant-a-12345"]]));
+    campaigns.setStatus(campaignId, "APPROVED");
+    campaigns.addPlanItem(planItemId, { campaignId, variantId, accountId: value.accountId, groupId: value.group.id, sortOrder: 0 }, now);
+
+    value.queue.insertBatch([{
+      id: queueItemId,
+      draftId: value.draft.id,
+      accountId: value.accountId,
+      groupId: value.group.id,
+      draftTitle: "Campaign Post",
+      body: "Post body",
+      accountName: "Operator",
+      groupName: "Group",
+      groupUrl: "https://facebook.com/groups/test",
+      snapshotHash: "hash-variant-a-12345",
+      campaignId,
+      campaignVariantId: variantId,
+      media: [],
+      createdAt: now,
+    }]);
+
+    try {
+      // 2. Create managed backup
+      const backup = await createManagedBackup(value.db, value.paths.backups, "MANUAL");
+      expect(backup.schemaVersion).toBe(8);
+      expect(backup.kind).toBe("MANUAL");
+
+      const validated = validateManagedBackup(value.paths.backups, backup.id);
+      expect(validated.schemaVersion).toBe(8);
+
+      // 3. Mutate database (delete campaign and linked entities)
+      value.db.prepare("DELETE FROM queue_items WHERE id = ?").run(queueItemId);
+      value.db.prepare("DELETE FROM campaign_plan_items WHERE id = ?").run(planItemId);
+      value.db.prepare("DELETE FROM campaign_variants WHERE id = ?").run(variantId);
+      value.db.prepare("DELETE FROM campaigns WHERE id = ?").run(campaignId);
+
+      expect(campaigns.get(campaignId)).toBeUndefined();
+      expect(value.queue.get(queueItemId)).toBeUndefined();
+
+      // 4. Restore database from backup
+      value.db.close();
+      const backupPath = resolveManagedBackup(value.paths.backups, backup.id);
+      const BetterSqlite3 = (await import("better-sqlite3")).default;
+      const backupCandidate = new BetterSqlite3(backupPath, { readonly: true });
+      await backupCandidate.backup(value.paths.database);
+      backupCandidate.close();
+
+      // 5. Reopen database and verify all campaign + variant + plan item + queue item provenance survived
+      const reopenedDb = openDatabase(value.paths);
+      try {
+        const reopenedCampaigns = new CampaignRepository(reopenedDb);
+        const reopenedQueue = new QueueRepository(reopenedDb);
+
+        const camp = reopenedCampaigns.get(campaignId);
+        expect(camp).toBeDefined();
+        expect(camp?.name).toBe("Summer Campaign 2026");
+        expect(camp?.status).toBe("APPROVED");
+
+        const variant = reopenedCampaigns.getVariant(variantId);
+        expect(variant).toBeDefined();
+        expect(variant?.label).toBe("Variant A");
+        expect(variant?.approvedSnapshotHash).toBe("hash-variant-a-12345");
+
+        const planItem = reopenedCampaigns.getPlanItem(planItemId);
+        expect(planItem).toBeDefined();
+        expect(planItem?.campaignId).toBe(campaignId);
+        expect(planItem?.variantId).toBe(variantId);
+
+        const qItem = reopenedQueue.get(queueItemId);
+        expect(qItem).toBeDefined();
+        expect(qItem?.campaignId).toBe(campaignId);
+        expect(qItem?.campaignVariantId).toBe(variantId);
+        expect(qItem?.campaignName).toBe("Summer Campaign 2026");
+        expect(qItem?.campaignVariantLabel).toBe("Variant A");
+      } finally {
+        reopenedDb.close();
+      }
+    } finally {
+      // closed in try/finally
     }
   });
 });

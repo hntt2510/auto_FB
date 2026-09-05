@@ -504,6 +504,11 @@ export function QueuePage({ accounts, onError }: Props) {
                     <td>
                       <strong>{item.accountName}</strong>
                       <small>{item.groupName}</small>
+                      {item.campaignName && (
+                        <small className="campaign-provenance" style={{ display: "block", color: "#2563eb", marginTop: "2px" }}>
+                          📁 {item.campaignName}{item.campaignVariantLabel ? ` · ${item.campaignVariantLabel}` : ""}
+                        </small>
+                      )}
                     </td>
                     <td>
                       <button
@@ -1117,6 +1122,11 @@ function QueueDetail({
           <span className={`status-badge status-${item.status.toLowerCase()}`}>
             {item.status}
           </span>
+          {item.campaignName && (
+            <span className="status-badge" style={{ backgroundColor: "#eff6ff", color: "#1d4ed8" }}>
+              Campaign: {item.campaignName}{item.campaignVariantLabel ? ` (${item.campaignVariantLabel})` : ""}
+            </span>
+          )}
         </div>
         <h4>{item.draftTitle}</h4>
         <pre className="snapshot-body">{item.body}</pre>

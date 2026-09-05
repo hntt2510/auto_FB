@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit
+        name: Typecheck
+      - run: npx eslint .
+        name: Lint
+      - run: node scripts/test-with-abi.cjs
+        name: Test
+      - run: npx electron-vite build
+        name: Build
